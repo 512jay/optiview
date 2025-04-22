@@ -1,0 +1,11 @@
+/db
+/generated
+optibatch.db
+.dev_notes.md
+/.vscode
+/.idea
+/.DS_Store
+/.vscode-test
+/.vscode-test-*
+x_generate*
+*.cpython*
