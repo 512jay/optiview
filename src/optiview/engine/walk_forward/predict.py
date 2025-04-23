@@ -55,24 +55,9 @@ def estimate_confidence(
     predict_month: pd.Timestamp,
     lookback: int = 3,
 ) -> int:
-    """
-    Estimate prediction confidence for a model/symbol based on rolling quality scores.
-
-    Args:
-        quality_scores_df: DataFrame with columns ["month", "symbol", "model", "quality_score"]
-        symbol: The trading symbol (e.g., "EURUSD")
-        model: The model name (e.g., "xgb", "rf")
-        predict_month: The month we are predicting for (e.g., 2025-04-01)
-        lookback: Number of previous months to include in average (default = 3)
-
-    Returns:
-        An integer from 1 to 5 representing the confidence star level.
-    """
-    # Convert to datetime just in case
     quality_scores_df["month"] = pd.to_datetime(quality_scores_df["month"])
-
-    # Find previous N months before prediction
     cutoff = predict_month - pd.offsets.MonthBegin(1)
+
     recent = (
         quality_scores_df[
             (quality_scores_df["symbol"] == symbol)
@@ -84,18 +69,18 @@ def estimate_confidence(
     )
 
     if recent.empty:
-        return 1  # No data, low confidence
+        return 1
 
     avg_quality = recent["quality_score"].mean()
 
-    # Map quality score (0 to 1) → 1 to 5 stars
-    if avg_quality >= 0.9:
+    # Adjusted mapping for more realistic distribution
+    if avg_quality >= 0.35:
         return 5
-    elif avg_quality >= 0.7:
+    elif avg_quality >= 0.32:
         return 4
-    elif avg_quality >= 0.5:
+    elif avg_quality >= 0.30:
         return 3
-    elif avg_quality >= 0.3:
+    elif avg_quality >= 0.28:
         return 2
     else:
         return 1
@@ -151,7 +136,7 @@ def save_prediction_outputs(
 ) -> None:
     out_dir = output_base / predict_month.strftime("%Y-%m") / symbol / model_name
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_csv = out_dir / "prediction_summary.csv"
+    out_csv = out_dir / "prediction_summary.parquet"
 
     if not overwrite and out_csv.exists():
         print(
@@ -161,7 +146,7 @@ def save_prediction_outputs(
 
     export_ini_file(df, out_dir)
 
-    df.to_csv(out_csv, index=False)
+    df.to_parquet(out_csv, index=False)
     print(f"✅ Saved prediction: {out_csv}")
 
 def prepare_train_test_split(
@@ -186,6 +171,9 @@ def prepare_train_test_split(
     train_df = df[df["run_month"].isin(train_months) & df[target].notna()]
     test_df = df[df["run_month"] == predict_month]
     test_df = test_df[test_df[features].notna().all(axis=1)]
+
+    # Remove duplicate columns in test_df
+    test_df = test_df.loc[:, ~test_df.columns.duplicated()]
 
     return train_df, test_df, features
 
@@ -231,7 +219,43 @@ def predict_optimal_config(
     )
     top_configs.insert(0, "rank", top_configs.index + 1)
 
-    # 5. Add placeholders for evaluation and write output
+    # 5. Estimate and attach confidence stars
+    from pathlib import Path
+
+    # Load prior model quality scores
+    quality_file = Path("generated/predictions/quality_scores.csv")
+    if quality_file.exists():
+        quality_df = pd.read_csv(quality_file, parse_dates=["month"])
+    else:
+        quality_df = pd.DataFrame(columns=["month", "symbol", "model", "quality_score"])
+
+    confidence = estimate_confidence(
+        quality_scores_df=quality_df,
+        symbol=symbol,
+        model=model_name,
+        predict_month=predict_month,
+    )
+
+    top_configs["confidence_stars"] = "★" * confidence + "☆" * (5 - confidence)
+
+    cols = list(top_configs.columns)
+    if "predicted_profit" in cols and "confidence_stars" in cols:
+        i = cols.index("predicted_profit")
+        cols = (
+            cols[: i + 1]
+            + ["confidence_stars"]
+            + [
+                col
+                for col in cols
+                if col not in {"confidence_stars"} or col == "predicted_profit"
+            ]
+        )
+        top_configs = top_configs[cols]
+
+    # Final deduplication before saving
+    top_configs = top_configs.loc[:, ~top_configs.columns.duplicated()]
+
+    # 6. Add placeholders for evaluation and write output
     save_prediction_outputs(top_configs, symbol, model_name, predict_month, output_base, overwrite)
 
     return top_configs
