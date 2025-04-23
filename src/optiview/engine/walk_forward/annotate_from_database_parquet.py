@@ -4,8 +4,9 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 from typing import Optional
+from optiview.data.db_path import get_db_path
 
-DB_PATH = Path("db/optibatch.db")
+DB_PATH = get_db_path()
 PREDICTIONS_DIR = Path("generated/predictions")
 INPUT_TOLERANCE = 1e-4
 

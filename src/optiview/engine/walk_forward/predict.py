@@ -55,9 +55,24 @@ def estimate_confidence(
     predict_month: pd.Timestamp,
     lookback: int = 3,
 ) -> int:
-    quality_scores_df["month"] = pd.to_datetime(quality_scores_df["month"])
-    cutoff = predict_month - pd.offsets.MonthBegin(1)
+    """
+    Estimate prediction confidence for a model/symbol based on rolling quality scores.
 
+    Args:
+        quality_scores_df: DataFrame with columns ["month", "symbol", "model", "quality_score"]
+        symbol: The trading symbol (e.g., "EURUSD")
+        model: The model name (e.g., "xgb", "rf")
+        predict_month: The month we are predicting for (e.g., 2025-04-01)
+        lookback: Number of previous months to include in average (default = 3)
+
+    Returns:
+        An integer from 1 to 5 representing the confidence star level.
+    """
+    # Convert to datetime just in case
+    quality_scores_df["month"] = pd.to_datetime(quality_scores_df["month"])
+
+    # Find previous N months before prediction
+    cutoff = predict_month - pd.offsets.MonthBegin(1)
     recent = (
         quality_scores_df[
             (quality_scores_df["symbol"] == symbol)
@@ -69,18 +84,18 @@ def estimate_confidence(
     )
 
     if recent.empty:
-        return 1
+        return 1  # No data, low confidence
 
     avg_quality = recent["quality_score"].mean()
 
-    # Adjusted mapping for more realistic distribution
-    if avg_quality >= 0.35:
+    # Map quality score (0 to 1) → 1 to 5 stars
+    if avg_quality >= 0.9:
         return 5
-    elif avg_quality >= 0.32:
+    elif avg_quality >= 0.7:
         return 4
-    elif avg_quality >= 0.30:
+    elif avg_quality >= 0.5:
         return 3
-    elif avg_quality >= 0.28:
+    elif avg_quality >= 0.3:
         return 2
     else:
         return 1

@@ -6,18 +6,19 @@ from pathlib import Path
 import pandas as pd
 from pandas import json_normalize
 from typing import Any
+from optiview.data.db_path import get_db_path
 
 
-def load_runs(db_path: Path) -> pd.DataFrame:
+def load_runs() -> pd.DataFrame:
+    db_path = get_db_path()
+
     """
     Loads optimization run results from the OptiBatch SQLite database.
 
-    Args:
-        db_path (Path): Path to the SQLite database file.
-
     Returns:
-        pd.DataFrame: DataFrame containing runs and extracted input params
+        pd.DataFrame: DataFrame containing runs and extracted input params.
     """
+
     if not db_path.exists():
         raise FileNotFoundError(f"Database not found at: {db_path}")
 

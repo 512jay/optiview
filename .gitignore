@@ -9,3 +9,4 @@ optibatch.db
 /.vscode-test-*
 x_generate*
 *.cpython*
+catboost_info/
