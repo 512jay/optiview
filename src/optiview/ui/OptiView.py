@@ -1,5 +1,6 @@
 # File: src/optiview/ui/OptiView.py
 
+import os
 import streamlit as st
 from streamlit import runtime
 from pathlib import Path
@@ -66,3 +67,10 @@ if st.button("Reset and Rebuild All"):
     )
 
     st.success("✅ Rebuild complete! Visit the sidebar to view predictions.")
+
+if st.button("Check DB Path"):
+    db_path = os.getenv("OPTIVIEW_DB_PATH")
+    if db_path and Path(db_path).exists():
+        st.success(f"✅ DB found at: {db_path}")
+    else:
+        st.error(f"❌ DB not found or env var not set: {db_path}")

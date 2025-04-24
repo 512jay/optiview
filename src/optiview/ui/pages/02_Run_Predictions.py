@@ -11,7 +11,7 @@ st.set_page_config(page_title="🔮 Run Predictions", layout="wide")
 st.title("🔮 Walk-Forward Prediction Engine")
 
 # --- Load available symbols and months dynamically ---
-df = load_runs(Path("optibatch.db"))
+df = load_runs()
 symbols = sorted(df["symbol"].dropna().unique())
 
 selected_symbol = st.selectbox("Select Symbol", symbols)

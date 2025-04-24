@@ -23,7 +23,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Load the full optimization dataset
-    df = load_runs(Path("optibatch.db"))
+    df = load_runs()
     symbols = df["symbol"].dropna().unique()
     months = sorted(df["run_month"].dropna().unique())
 

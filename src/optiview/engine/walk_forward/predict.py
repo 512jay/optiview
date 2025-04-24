@@ -54,25 +54,16 @@ def estimate_confidence(
     model: str,
     predict_month: pd.Timestamp,
     lookback: int = 3,
-) -> int:
+) -> tuple[int, float]:
     """
-    Estimate prediction confidence for a model/symbol based on rolling quality scores.
-
-    Args:
-        quality_scores_df: DataFrame with columns ["month", "symbol", "model", "quality_score"]
-        symbol: The trading symbol (e.g., "EURUSD")
-        model: The model name (e.g., "xgb", "rf")
-        predict_month: The month we are predicting for (e.g., 2025-04-01)
-        lookback: Number of previous months to include in average (default = 3)
+    Estimate prediction confidence (1–5 stars) and its numeric quality score.
 
     Returns:
-        An integer from 1 to 5 representing the confidence star level.
+        (stars: int, avg_quality_score: float)
     """
-    # Convert to datetime just in case
     quality_scores_df["month"] = pd.to_datetime(quality_scores_df["month"])
-
-    # Find previous N months before prediction
     cutoff = predict_month - pd.offsets.MonthBegin(1)
+
     recent = (
         quality_scores_df[
             (quality_scores_df["symbol"] == symbol)
@@ -84,21 +75,32 @@ def estimate_confidence(
     )
 
     if recent.empty:
-        return 1  # No data, low confidence
+        return 1, 0.0  # Default low confidence
 
-    avg_quality = recent["quality_score"].mean()
+    # Weighted average by recency (most recent gets highest weight)
+    recent["weight"] = range(len(recent), 0, -1)
+    avg_quality = (recent["quality_score"] * recent["weight"]).sum() / recent[
+        "weight"
+    ].sum()
 
-    # Map quality score (0 to 1) → 1 to 5 stars
-    if avg_quality >= 0.9:
-        return 5
-    elif avg_quality >= 0.7:
-        return 4
-    elif avg_quality >= 0.5:
-        return 3
+    # Apply penalty for unstable models
+    std = recent["quality_score"].std()
+    penalty = 1 if std > 0.25 and avg_quality < 0.8 else 0
+
+    # Star mapping
+    if avg_quality >= 0.8:
+        stars = 5
+    elif avg_quality >= 0.6:
+        stars = 4
+    elif avg_quality >= 0.45:
+        stars = 3
     elif avg_quality >= 0.3:
-        return 2
+        stars = 2
     else:
-        return 1
+        stars = 1
+
+    stars = max(1, stars - penalty)
+    return stars, round(avg_quality, 3)
 
 
 def get_model(model_name: str) -> Any:
@@ -193,6 +195,31 @@ def prepare_train_test_split(
     return train_df, test_df, features
 
 
+def load_historical_quality_scores(pred_root: Path, symbol: str) -> pd.DataFrame:
+    rows = []
+    for month_dir in sorted(pred_root.iterdir()):
+        if not month_dir.is_dir():
+            continue
+        month_str = month_dir.name
+        for model_dir in (month_dir / symbol).glob("*"):
+            annot_path = model_dir / "annotations.parquet"
+            if annot_path.exists():
+                df = pd.read_parquet(annot_path)
+                if "quality_score" in df.columns:
+                    df = df.loc[:, ["rank", "quality_score"]]
+                    if df["quality_score"].notna().any():  # ✅ only append if actual values exist
+                        df["month"] = pd.to_datetime(month_str)
+                        df["symbol"] = symbol
+                        df["model"] = model_dir.name
+                        rows.append(df[["month", "symbol", "model", "quality_score"]])
+
+    # ✅ Fix: Remove empty frames before concat
+    rows = [r for r in rows if not r.empty]
+    if not rows:
+        return pd.DataFrame(columns=["month", "symbol", "model", "quality_score"])
+    return pd.concat(rows, ignore_index=True)
+
+
 def predict_optimal_config(
     df: pd.DataFrame,
     predict_month: pd.Timestamp,
@@ -238,19 +265,16 @@ def predict_optimal_config(
     from pathlib import Path
 
     # Load prior model quality scores
-    quality_file = Path("generated/predictions/quality_scores.csv")
-    if quality_file.exists():
-        quality_df = pd.read_csv(quality_file, parse_dates=["month"])
-    else:
-        quality_df = pd.DataFrame(columns=["month", "symbol", "model", "quality_score"])
+    quality_df = load_historical_quality_scores(output_base, symbol)
 
-    confidence = estimate_confidence(
+    confidence, score = estimate_confidence(
         quality_scores_df=quality_df,
         symbol=symbol,
         model=model_name,
         predict_month=predict_month,
     )
 
+    top_configs["confidence_score"] = score
     top_configs["confidence_stars"] = "★" * confidence + "☆" * (5 - confidence)
 
     cols = list(top_configs.columns)
@@ -302,34 +326,46 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         choices=SUPPORTED_MODELS.keys(),
-        default="xgb",
-        help="Model to use for prediction",
+        help="Optionally restrict to a single model (e.g. rf)",
+    )
+
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing prediction files if they already exist",
     )
 
     args = parser.parse_args()
 
-    df = load_runs(Path("optibatch.db"))
+    df = load_runs()
     predict_month = pd.to_datetime(args.month + "-01")
     symbols = df["symbol"].dropna().unique()
+
+    model_names = [args.model] if args.model else SUPPORTED_MODELS.keys()
 
     for symbol in symbols:
         if args.symbol and symbol != args.symbol:
             continue
 
-        print(f"\n🔮 Predicting for {symbol}...")
-        top = predict_optimal_config (
-            df,
-            symbol=symbol,
-            predict_month=predict_month,
-            target=args.target,
-            override_model=args.model,
-        )
-        if top.empty:
-            print(f"⚠️ No predictions available for {symbol} in {args.month}.")
-            continue
-        print(
-            top[
-                ["rank", "run_month", "symbol", "predicted_profit"]
-                + [c for c in top.columns if c.startswith("input_")]
-            ]
-        )
+        for model in model_names:
+            print(f"\n🔮 Predicting for {symbol} with model {model}...")
+            top = predict_optimal_config(
+                df,
+                symbol=symbol,
+                predict_month=predict_month,
+                target=args.target,
+                override_model=model,
+                overwrite=args.overwrite,
+            )
+
+            if top.empty:
+                print(f"⚠️ No predictions available for {symbol} ({model}) in {args.month}.")
+                continue
+
+            if args.symbol:
+                print(
+                    top[
+                        ["rank", "run_month", "symbol", "predicted_profit"]
+                        + [c for c in top.columns if c.startswith("input_")]
+                    ]
+                )
