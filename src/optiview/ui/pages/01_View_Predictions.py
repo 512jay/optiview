@@ -100,6 +100,7 @@ def load_prediction_summary(pred_root: Path, symbol: str, month: str) -> pd.Data
     df_all.rename(
         columns={
             "recommended": "✔️",
+            "expert_name": "strat",
             "model": "mod",
             "rank": "rnk",
             "predicted_profit": "prof",
@@ -112,7 +113,7 @@ def load_prediction_summary(pred_root: Path, symbol: str, month: str) -> pd.Data
         inplace=True,
     )
 
-    base_cols = ["✔️", "mod", "prof", "conf", "★", "actp", "qual", "☆", "rnk"]
+    base_cols = ["✔️", "mod", "strat","prof", "conf", "★", "actp", "qual", "☆", "rnk"]
     input_cols = sorted([c for c in df_all.columns if c.startswith("input_")])
     selected = [c for c in base_cols if c in df_all.columns] + input_cols
     return df_all[selected]
@@ -154,6 +155,10 @@ def render_predictions_view() -> None:
                 ),
                 "mod": st.column_config.TextColumn(
                     label="mod", help="Model used for prediction (e.g., xgb, cat)"
+                ),
+                "strat": st.column_config.TextColumn(
+                    label="strat",
+                    help="Strategy or Expert Advisor used for this prediction",
                 ),
                 "prof": st.column_config.NumberColumn(
                     label="prof", help="Expected profit for this configuration"
