@@ -7,7 +7,7 @@ based on previous optimization runs.
 - Loads prior MT5 optimization data.
 - Trains a machine learning regressor to learn how inputs (e.g., StopLoss%) affect performance.
 - Predicts the best parameter combos for the next month using a selected model (default: XGBoost).
-- Saves results to CSV and exports a ready-to-test INI config file.
+- Saves results to parquet and exports a ready-to-test INI config file.
 
 🧠 Supported models:
 - XGBoost (xgb): Great for non-linear data and highly performant.
