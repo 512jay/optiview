@@ -12,7 +12,7 @@ It reads from a shared SQLite database (`optibatch.db`) maintained by OptiBatch 
 
 ## 🛠 Requirements
 
-- Python 3.11+ (do **not** use 3.13 yet for stability)
+- Python 3.13
 - [Poetry](https://python-poetry.org/) for dependency management
 - OptiBatch must have already ingested data and created `optibatch.db`
 
