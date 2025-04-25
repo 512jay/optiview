@@ -1,25 +1,22 @@
 # 🛠️ Makefile for OptiView
 # Shortcuts to run common development tasks
 
-.PHONY: predict annotate view reset test
+.PHONY: annotations predictions view reset
 
-predict:
+:
 	poetry run python src/optiview/engine/walk_forward/bulk_predict.py
 
-annotate:
+annotations:
 	poetry run python src/optiview/engine/walk_forward/annotate_predictions.py
 
 view:
 	streamlit run src/optiview/ui/Optiview.py
 
 reset:
-	rm -rf generated
+	rm optiview.db
+	poetry run python scripts/init_db.py
+	make predictions
+	make annotations
 
-predict-single:
-	poetry run python src/optiview/engine/walk_forward/predict.py \
-	  --month 2025-03 \
-	  --symbol EURUSD \
-	  --model xgb
-
-quality:
-	poetry run python src/optiview/engine/walk_forward/annotate_quality_scores.py
+init:
+	poetry run python scripts/init_db.py
