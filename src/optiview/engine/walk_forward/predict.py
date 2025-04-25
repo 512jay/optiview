@@ -36,6 +36,7 @@ from sklearn.preprocessing import StandardScaler
 from optiview.data.loader import load_runs
 from optiview.data.join_tools import convert_to_prediction_dict, insert_predictions
 import argparse
+import json
 
 # These are all the machine learning regressors we support
 SUPPORTED_MODELS: dict[str, type] = {
@@ -164,6 +165,19 @@ def save_prediction_outputs(
     )
 
 
+def infer_input_columns(df: pd.DataFrame) -> list[str]:
+    """Return list of unique input keys used in params_json / inputs."""
+    json_col = "params_json" if "params_json" in df.columns else "inputs"
+    all_keys: set[str] = set()
+    for val in df[json_col].dropna():
+        try:
+            parsed = val if isinstance(val, dict) else json.loads(val)
+            all_keys.update(parsed.keys())
+        except Exception:
+            continue
+    return list(all_keys)
+
+
 def prepare_train_test_split(
     df: pd.DataFrame,
     symbol: str,
@@ -182,7 +196,7 @@ def prepare_train_test_split(
         idx = months.index(predict_month)
         train_months = months[max(0, idx - months_back):idx]
 
-    features = [col for col in df.columns if col.startswith("input_")]
+    features = sorted([col for col in df.columns if col in infer_input_columns(df)])
     train_df = df[df["run_month"].isin(train_months) & df[target].notna()]
     test_df = df[df["run_month"] == predict_month]
     test_df = test_df[test_df[features].notna().all(axis=1)]
@@ -191,31 +205,6 @@ def prepare_train_test_split(
     test_df = test_df.loc[:, ~test_df.columns.duplicated()]
 
     return train_df, test_df, features
-
-
-def load_historical_quality_scores(pred_root: Path, symbol: str) -> pd.DataFrame:
-    rows = []
-    for month_dir in sorted(pred_root.iterdir()):
-        if not month_dir.is_dir():
-            continue
-        month_str = month_dir.name
-        for model_dir in (month_dir / symbol).glob("*"):
-            annot_path = model_dir / "annotations.parquet"
-            if annot_path.exists():
-                df = pd.read_parquet(annot_path)
-                if "quality_score" in df.columns:
-                    df = df.loc[:, ["rank", "quality_score"]]
-                    if df["quality_score"].notna().any():  # ✅ only append if actual values exist
-                        df["month"] = pd.to_datetime(month_str)
-                        df["symbol"] = symbol
-                        df["model"] = model_dir.name
-                        rows.append(df[["month", "symbol", "model", "quality_score"]])
-
-    # ✅ Fix: Remove empty frames before concat
-    rows = [r for r in rows if not r.empty]
-    if not rows:
-        return pd.DataFrame(columns=["month", "symbol", "model", "quality_score"])
-    return pd.concat(rows, ignore_index=True)
 
 
 def predict_optimal_config(
@@ -227,7 +216,6 @@ def predict_optimal_config(
     top_n: int = 3,
     output_base: Path = Path("generated/predictions"),
     override_model: Optional[str] = None,
-    overwrite: bool = False,
 ) -> pd.DataFrame:  # 1. Prepare training and test datasets
     train_df, test_df, features = prepare_train_test_split(df, symbol, predict_month, months_back, target)
 
@@ -259,11 +247,9 @@ def predict_optimal_config(
     )
     top_configs.insert(0, "rank", top_configs.index + 1)
 
-    # 5. Estimate and attach confidence stars
-    from pathlib import Path
-
     # Load prior model quality scores
-    quality_df = load_historical_quality_scores(output_base, symbol)
+    from optiview.data.loader import get_quality_scores
+    quality_df = get_quality_scores(symbol, model_name, predict_month.strftime("%Y-%m"), lookback=3)
 
     confidence, score = estimate_confidence(
         quality_scores_df=quality_df,
@@ -327,12 +313,6 @@ if __name__ == "__main__":
         help="Optionally restrict to a single model (e.g. rf)",
     )
 
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite existing prediction files if they already exist",
-    )
-
     args = parser.parse_args()
 
     df = load_runs()
@@ -353,8 +333,7 @@ if __name__ == "__main__":
                 predict_month=predict_month,
                 target=args.target,
                 override_model=model,
-                overwrite=args.overwrite,
-            )
+                )
 
             if top.empty:
                 print(f"⚠️ No predictions available for {symbol} ({model}) in {args.month}.")
@@ -364,6 +343,6 @@ if __name__ == "__main__":
                 print(
                     top[
                         ["rank", "run_month", "symbol", "predicted_profit"]
-                        + [c for c in top.columns if c.startswith("input_")]
+                        + [col for col in top.columns if col in infer_input_columns(df)]
                     ]
                 )
