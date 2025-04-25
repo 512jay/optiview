@@ -165,17 +165,19 @@ def save_prediction_outputs(
     )
 
 
-def infer_input_columns(df: pd.DataFrame) -> list[str]:
-    """Return list of unique input keys used in params_json / inputs."""
-    json_col = "params_json" if "params_json" in df.columns else "inputs"
-    all_keys: set[str] = set()
-    for val in df[json_col].dropna():
+def get_training_features(df: pd.DataFrame) -> list[str]:
+    """
+    Return the list of features used for model training,
+    based on the keys from params_json.
+    """
+    for val in df["params_json"].dropna():
         try:
             parsed = val if isinstance(val, dict) else json.loads(val)
-            all_keys.update(parsed.keys())
+            if isinstance(parsed, dict):
+                return list(parsed.keys())
         except Exception:
             continue
-    return list(all_keys)
+    raise ValueError("No valid params_json found.")
 
 
 def prepare_train_test_split(
@@ -184,7 +186,9 @@ def prepare_train_test_split(
     predict_month: Optional[pd.Timestamp],
     months_back: int,
     target: str,
+    input_keys: list[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+
     df = df[df["symbol"] == symbol].copy()
     df["run_month"] = pd.to_datetime(df["run_month"])
     months = sorted(df["run_month"].dropna().unique())
@@ -196,7 +200,8 @@ def prepare_train_test_split(
         idx = months.index(predict_month)
         train_months = months[max(0, idx - months_back):idx]
 
-    features = sorted([col for col in df.columns if col in infer_input_columns(df)])
+    features = [col for col in df.columns if col in input_keys]
+
     train_df = df[df["run_month"].isin(train_months) & df[target].notna()]
     test_df = df[df["run_month"] == predict_month]
     test_df = test_df[test_df[features].notna().all(axis=1)]
@@ -207,6 +212,17 @@ def prepare_train_test_split(
     return train_df, test_df, features
 
 
+def extract_input_matrix(df: pd.DataFrame, input_keys: list[str]) -> pd.DataFrame:
+    rows = []
+    for val in df["params_json"]:
+        try:
+            parsed = val if isinstance(val, dict) else json.loads(val)
+            rows.append({k: parsed.get(k, None) for k in input_keys})
+        except Exception:
+            rows.append({k: None for k in input_keys})
+    return pd.DataFrame(rows)
+
+
 def predict_optimal_config(
     df: pd.DataFrame,
     predict_month: pd.Timestamp,
@@ -214,29 +230,47 @@ def predict_optimal_config(
     symbol: str = "EURUSD",
     target: Literal["profit", "custom_score"] = "profit",
     top_n: int = 3,
-    output_base: Path = Path("generated/predictions"),
     override_model: Optional[str] = None,
-) -> pd.DataFrame:  # 1. Prepare training and test datasets
-    train_df, test_df, features = prepare_train_test_split(df, symbol, predict_month, months_back, target)
+) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Predict the optimal configuration for a given symbol and month.
+    Returns:
+        - DataFrame with top configurations
+        - List of input features used for training
+    """
+    # 1. Prepare data
+
+    input_keys = get_training_features(df)
+    train_df, test_df, features = prepare_train_test_split(
+        df, symbol, predict_month, months_back, target, input_keys
+    )
 
     if train_df.empty or test_df.empty:
         print(f"⚠️ Skipping {symbol} for {predict_month.strftime('%Y-%m')} — no usable data")
-        return pd.DataFrame()
+        return pd.DataFrame(), []
 
     # 2. Train model
     model_name = override_model or "xgb"
     model = get_model(model_name)
 
-    X_train, y_train = train_df[features], train_df[target]
-    X_test = test_df[features]
+    X_train = extract_input_matrix(train_df, input_keys)
+    X_test = extract_input_matrix(test_df, input_keys)
 
+    # Drop rows with missing input features
+    X_train = X_train.dropna()
+    train_df = train_df.reset_index(drop=True).loc[X_train.index]
+    y_train = train_df[target]
+
+    X_test = X_test.dropna()
+    test_df = test_df.reset_index(drop=True).loc[X_test.index]
+
+
+    # Normalize and train
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
     model.fit(X_train_scaled, y_train)
-
-    # 3. Generate predictions
     test_df["predicted_profit"] = model.predict(X_test_scaled)
 
     # 4. Select top configs
@@ -281,7 +315,7 @@ def predict_optimal_config(
     # 6. Add placeholders for evaluation and write output
     save_prediction_outputs(top_configs, symbol, model_name, predict_month)
 
-    return top_configs
+    return top_configs, features
 
 
 if __name__ == "__main__":
@@ -327,7 +361,7 @@ if __name__ == "__main__":
 
         for model in model_names:
             print(f"\n🔮 Predicting for {symbol} with model {model}...")
-            top = predict_optimal_config(
+            top, features = predict_optimal_config(
                 df,
                 symbol=symbol,
                 predict_month=predict_month,
@@ -340,9 +374,4 @@ if __name__ == "__main__":
                 continue
 
             if args.symbol:
-                print(
-                    top[
-                        ["rank", "run_month", "symbol", "predicted_profit"]
-                        + [col for col in top.columns if col in infer_input_columns(df)]
-                    ]
-                )
+                print(top[[col for col in top.columns if col in features]])
