@@ -10,3 +10,4 @@ optibatch.db
 x_generate*
 *.cpython*
 catboost_info/
+optiview.db
