@@ -1,0 +1,35 @@
+project_name: OptiView
+last_updated: '2025-04-25'
+current_phase: walk-forward prediction + evaluation
+status:
+  data_ingestion: complete
+  model_training: complete
+  prediction_saving: complete
+  quality_scoring: complete
+  annotation_pipeline: complete
+  database_transition: complete
+  streamlit_ui: not started
+  ini_export: tabled
+  confidence_visualization: partial
+  config_quality_dashboard: tabled
+next_tasks:
+- Build Streamlit View tab
+- Show prediction confidence + quality stars
+- 'Add filters: symbol, model, date'
+- Add note/tag editing
+tabled_ideas:
+- config_quality_histogram
+- auto-evaluate next month profit delta
+- streamlit leaderboard tab
+tools_used:
+- Python 3.13
+- Poetry
+- SQLite (optiview.db)
+- SQLAlchemy ORM
+- MetaTrader5 (external)
+- Streamlit (planned)
+principles:
+- all data comes from database (no more .parquet/.csv)
+- models must be EA-agnostic (no input_ assumption)
+- annotation always recomputes
+- all code mypy compliant
