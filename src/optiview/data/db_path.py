@@ -1,18 +1,12 @@
 # File: src/optiview/data/db_path.py
-
-from pathlib import Path
 import os
+from pathlib import Path
 
 
-def get_db_path() -> Path:
-    """
-    Returns the path to the OptiView SQLite database using the OPTIVIEW_DB_PATH
-    environment variable. Raises a clear error if not set or file not found.
-    """
-    raw = os.getenv("OPTIVIEW_DB_PATH")
-    if not raw:
-        raise RuntimeError("Environment variable OPTIVIEW_DB_PATH is not set.")
-    path = Path(raw)
-    if not path.exists():
-        raise FileNotFoundError(f"Database not found at: {path}")
-    return path
+def get_optiview_db_path() -> str:
+    return str(Path(__file__).parent / "optiview.db")
+
+
+def get_optibatch_db_path() -> str:
+    """Get the OptiBatch DB path from env var, fallback empty string."""
+    return os.getenv("OPTIBATCH_DB_PATH", "")

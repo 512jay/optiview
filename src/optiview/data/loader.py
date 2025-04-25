@@ -6,11 +6,11 @@ from pathlib import Path
 import pandas as pd
 from pandas import json_normalize
 from typing import Any
-from optiview.data.db_path import get_db_path
+from optiview.data.db_path import get_optibatch_db_path
 
 
 def load_runs() -> pd.DataFrame:
-    db_path = get_db_path()
+    db_path = Path(get_optibatch_db_path())
 
     """
     Loads optimization run results from the OptiBatch SQLite database.

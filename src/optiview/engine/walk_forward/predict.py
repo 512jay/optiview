@@ -34,7 +34,7 @@ from typing import Literal, Optional, Any
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from optiview.data.loader import load_runs
-from optiview.engine.walk_forward.export_ini import export_ini_file
+from optiview.data.join_tools import convert_to_prediction_dict, insert_predictions
 import argparse
 
 # These are all the machine learning regressors we support
@@ -148,23 +148,21 @@ def save_prediction_outputs(
     symbol: str,
     model_name: str,
     predict_month: pd.Timestamp,
-    output_base: Path,
-    overwrite: bool,
+    **kwargs,
 ) -> None:
-    out_dir = output_base / predict_month.strftime("%Y-%m") / symbol / model_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_csv = out_dir / "prediction_summary.parquet"
+    """
+    Convert and store predictions into the optiview database.
+    """
+    month = predict_month.strftime("%Y-%m")
+    predictions = [
+        convert_to_prediction_dict(row, symbol, model_name, month)
+        for _, row in df.iterrows()
+    ]
+    insert_predictions(predictions)
+    print(
+        f"✅ Saved {len(predictions)} predictions for {symbol} ({model_name}) into database."
+    )
 
-    if not overwrite and out_csv.exists():
-        print(
-            f"⏩ Skipping {symbol} {predict_month.strftime('%Y-%m')} ({model_name}) — already exists."
-        )
-        return
-
-    export_ini_file(df, out_dir)
-
-    df.to_parquet(out_csv, index=False)
-    print(f"✅ Saved prediction: {out_csv}")
 
 def prepare_train_test_split(
     df: pd.DataFrame,
@@ -295,7 +293,7 @@ def predict_optimal_config(
     top_configs = top_configs.loc[:, ~top_configs.columns.duplicated()]
 
     # 6. Add placeholders for evaluation and write output
-    save_prediction_outputs(top_configs, symbol, model_name, predict_month, output_base, overwrite)
+    save_prediction_outputs(top_configs, symbol, model_name, predict_month)
 
     return top_configs
 
