@@ -2,9 +2,32 @@
 
 import argparse
 import pandas as pd
+from typing import List
 from optiview.engine.walk_forward.predict import predict_optimal_config
 from optiview.data.loader import load_runs
 from optiview.maintenance.missing_months_report import generate_missing_months_report
+
+
+def find_predictable_months_for_symbol(
+    symbol_runs: pd.DataFrame, min_history: int = 3
+) -> List[str]:
+    """
+    Find months for which we can predict, for a given symbol's historical runs.
+
+    Args:
+        symbol_runs (pd.DataFrame): DataFrame containing runs for a single symbol.
+        min_history (int): Minimum number of past months required to predict.
+
+    Returns:
+        List[str]: List of months ("YYYY-MM") eligible for prediction.
+    """
+    months = symbol_runs["run_month"].dropna().unique()
+    months_sorted = sorted(months)
+
+    if len(months_sorted) <= min_history:
+        return []
+
+    return months_sorted[min_history:]
 
 
 def main() -> None:
@@ -16,7 +39,10 @@ def main() -> None:
         help="How many months back to use for training.",
     )
     parser.add_argument(
-        "--target", type=str, default="profit", help="Target column name."
+        "--target",
+        type=str,
+        default="profit",
+        help="Target column name.",
     )
     parser.add_argument(
         "--prediction_col",
@@ -30,6 +56,11 @@ def main() -> None:
         default=1.0,
         help="Penalty weight for prediction error.",
     )
+    parser.add_argument(
+        "--full-history",
+        action="store_true",
+        help="Predict across all months instead of only the latest month.",
+    )
     args = parser.parse_args()
 
     print("🔄 Starting automatic bulk prediction process...")
@@ -41,51 +72,61 @@ def main() -> None:
         return
 
     symbols = sorted(df["symbol"].unique())
-
     models = ["xgb", "rf", "cat", "lgbm", "gbr", "histgb"]
-
-    # Automatically detect next month to predict
-    all_months = pd.to_datetime(df["run_month"].dropna().unique())
-    if all_months.empty:
-        print("❌ No historical months available.")
-        return
-
-    latest_month = all_months.max()
-    predict_month = (latest_month + pd.offsets.MonthBegin(1)).strftime("%Y-%m")
 
     for symbol in symbols:
         symbol_runs = df[df["symbol"] == symbol]
 
         if symbol_runs.empty:
-            print(f"⚠️ No data for symbol: {symbol}")
+            print(f"⚠️ No data for symbol: {symbol}. Skipping...")
             continue
 
-        for model in models:
-            print(f"🔮 Predicting {symbol} ({model}) for {predict_month}...")
+        if args.full_history:
+            predict_months = find_predictable_months_for_symbol(
+                symbol_runs, min_history=args.months_back
+            )
+            if not predict_months:
+                print(f"⚠️ Not enough historical months for {symbol}. Skipping...")
+                continue
+        else:
+            months = symbol_runs["run_month"].dropna().unique()
+            months = sorted(months)
+            if len(months) <= args.months_back:
+                print(f"⚠️ Not enough historical months for {symbol}. Skipping...")
+                continue
+            latest_month = months[-1]
+            year_str, month_str = latest_month.split("-")
+            year = int(year_str)
+            month = int(month_str)
+            if month == 12:
+                next_month = f"{year + 1}-01"
+            else:
+                next_month = f"{year}-{month + 1:02d}"
+            predict_months = [next_month]
 
-            try:
-                predict_optimal_config(
-                    df=symbol_runs,
-                    symbol=symbol,
-                    predict_month=predict_month,
-                    months_back=args.months_back,
-                    target=args.target,
-                    prediction_col=args.prediction_col,
-                    prediction_error_penalty=args.prediction_error_penalty,
-                    override_model=model,
-                )
-            except Exception as e:
-                print(f"❌ Prediction failed for {symbol} ({model}): {e}")
+        for predict_month in predict_months:
+            for model in models:
+                print(f"🔮 Predicting {symbol} ({model}) for {predict_month}...")
 
-    print("✅ Bulk prediction complete.\n")
+                try:
+                    predict_optimal_config(
+                        df=symbol_runs,
+                        symbol=symbol,
+                        predict_month=predict_month,  # ✅ Passed as a string, no Timestamp
+                        months_back=args.months_back,
+                        target=args.target,
+                        prediction_col=args.prediction_col,
+                        prediction_error_penalty=args.prediction_error_penalty,
+                        override_model=model,
+                    )
+                except Exception as e:
+                    print(
+                        f"❌ Prediction failed for {symbol} ({model}) in {predict_month}: {e}"
+                    )
 
-    print("🧹 Checking for missing prediction months...")
+    print("\n✅ Bulk prediction complete.")
 
-
-if __name__ == "__main__":
-    main()
     print("\n🧹 Checking for missing prediction months...")
-
     report = generate_missing_months_report(lookback_months=12)
 
     if report.empty:
@@ -93,3 +134,7 @@ if __name__ == "__main__":
     else:
         print("⚠️ Missing months detected:")
         print(report.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

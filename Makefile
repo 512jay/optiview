@@ -1,7 +1,10 @@
 # 🛠️ Makefile for OptiView
 # Shortcuts to run common development tasks
 
-.PHONY: annotations predictions view reset
+.PHONY: annotations predictions view reset bulk init
+
+bulk:
+	poetry run python src/optiview/engine/walk_forward/bulk_predict.py --full-history
 
 predictions:
 	poetry run python src/optiview/engine/walk_forward/bulk_predict.py
