@@ -1,377 +1,135 @@
-# 📁 src/optiview/engine/walk_forward/predict.py
-"""
-This script predicts optimal input parameters for a trading strategy
-based on previous optimization runs.
+# File: src/optiview/engine/walk_forward/predict.py
 
-📌 What this script does:
-- Loads prior MT5 optimization data.
-- Trains a machine learning regressor to learn how inputs (e.g., StopLoss%) affect performance.
-- Predicts the best parameter combos for the next month using a selected model (default: XGBoost).
-- Saves results to parquet and exports a ready-to-test INI config file.
-
-🧠 Supported models:
-- XGBoost (xgb): Great for non-linear data and highly performant.
-- Random Forest (rf): Robust and interpretable.
-- Gradient Boosting (gbr): Slower but accurate.
-- Histogram Gradient Boosting (histgb): Fast, scikit-learn native.
-- LightGBM (lgbm): Fast with large datasets.
-- CatBoost (cat): Good for categorical data.
-
-🛠️ Model selection:
-Use `--model rf` to try Random Forest or leave default as `xgb`.
-"""
-
-from xgboost import XGBRegressor
-from catboost import CatBoostRegressor
-from lightgbm import LGBMRegressor
-from sklearn.ensemble import (
-    RandomForestRegressor,
-    GradientBoostingRegressor,
-    HistGradientBoostingRegressor,
-)
-from pathlib import Path
-from typing import Literal, Optional, Any
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-from optiview.data.loader import load_runs
-from optiview.data.join_tools import convert_to_prediction_dict, insert_predictions
-import argparse
-import json
-
-# These are all the machine learning regressors we support
-SUPPORTED_MODELS: dict[str, type] = {
-    "xgb": XGBRegressor,  # XGBoost (high performance gradient boosting)
-    "rf": RandomForestRegressor,  # Random Forest (bagging ensemble)
-    "gbr": GradientBoostingRegressor,  # Standard scikit-learn gradient boosting
-    "histgb": HistGradientBoostingRegressor,  # Fast histogram-based boosting
-    "lgbm": LGBMRegressor,  # LightGBM (efficient, great with large datasets)
-    "cat": CatBoostRegressor,  # CatBoost (great with categorical data)
-}
-
-
-def estimate_confidence(
-    quality_scores_df: pd.DataFrame,
-    symbol: str,
-    model: str,
-    predict_month: pd.Timestamp,
-    lookback: int = 3,
-) -> tuple[int, float]:
-    """
-    Estimate prediction confidence (1–5 stars) and its numeric quality score.
-
-    Returns:
-        (stars: int, avg_quality_score: float)
-    """
-    quality_scores_df["month"] = pd.to_datetime(quality_scores_df["month"])
-    cutoff = predict_month - pd.offsets.MonthBegin(1)
-
-    recent = (
-        quality_scores_df[
-            (quality_scores_df["symbol"] == symbol)
-            & (quality_scores_df["model"] == model)
-            & (quality_scores_df["month"] < predict_month)
-        ]
-        .sort_values("month", ascending=False)
-        .head(lookback)
-    )
-
-    if recent.empty:
-        return 1, 0.0  # Default low confidence
-
-    # Weighted average by recency (most recent gets highest weight)
-    recent["weight"] = range(len(recent), 0, -1)
-    avg_quality = (recent["quality_score"] * recent["weight"]).sum() / recent[
-        "weight"
-    ].sum()
-
-    # Apply penalty for unstable models
-    std = recent["quality_score"].std()
-    penalty = 1 if std > 0.25 and avg_quality < 0.8 else 0
-
-    # Star mapping
-    if avg_quality >= 0.8:
-        stars = 5
-    elif avg_quality >= 0.6:
-        stars = 4
-    elif avg_quality >= 0.45:
-        stars = 3
-    elif avg_quality >= 0.3:
-        stars = 2
-    else:
-        stars = 1
-
-    stars = max(1, stars - penalty)
-    return stars, round(avg_quality, 3)
-
-
-def get_model(model_name: str) -> Any:
-    """Helper function to instantiate a regressor model with appropriate arguments."""
-    if model_name not in SUPPORTED_MODELS:
-        raise ValueError(f"Unsupported model: {model_name}")
-
-    ModelClass = SUPPORTED_MODELS[model_name]
-    extra_args: dict[str, Any] = {}
-
-    # Add model-specific parameters
-    if model_name == "xgb":
-        extra_args = {
-            "learning_rate": 0.1,
-            "subsample": 0.8,
-            "colsample_bytree": 0.8,
-            "verbosity": 0,
-        }
-    elif model_name == "cat":
-        extra_args = {"verbose": False}
-    elif model_name == "lgbm":
-        extra_args = {
-            "verbosity": -1,
-        }
-
-    # Common arguments
-    common_args: dict[str, Any] = {
-        "max_depth": 4,
-        "random_state": 42,
-    }
-
-    if model_name in {"xgb", "rf", "gbr", "lgbm"}:
-        common_args["n_estimators"] = 100
-    elif model_name == "histgb":
-        common_args["max_iter"] = 100
-
-    if model_name in {"xgb", "rf", "lgbm"}:
-        common_args["n_jobs"] = -1
-
-    return ModelClass(**common_args, **extra_args)
-
-
-def save_prediction_outputs(
-    df: pd.DataFrame,
-    symbol: str,
-    model_name: str,
-    predict_month: pd.Timestamp,
-    **kwargs,
-) -> None:
-    """
-    Convert and store predictions into the optiview database.
-    """
-    month = predict_month.strftime("%Y-%m")
-    predictions = [
-        convert_to_prediction_dict(row, symbol, model_name, month)
-        for _, row in df.iterrows()
-    ]
-    insert_predictions(predictions)
-    print(
-        f"✅ Saved {len(predictions)} predictions for {symbol} ({model_name}) into database."
-    )
-
-
-def get_training_features(df: pd.DataFrame) -> list[str]:
-    """
-    Return the list of features used for model training,
-    based on the keys from params_json.
-    """
-    for val in df["params_json"].dropna():
-        try:
-            parsed = val if isinstance(val, dict) else json.loads(val)
-            if isinstance(parsed, dict):
-                return list(parsed.keys())
-        except Exception:
-            continue
-    raise ValueError("No valid params_json found.")
-
-
-def prepare_train_test_split(
-    df: pd.DataFrame,
-    symbol: str,
-    predict_month: Optional[pd.Timestamp],
-    months_back: int,
-    target: str,
-    input_keys: list[str],
-) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-
-    df = df[df["symbol"] == symbol].copy()
-    df["run_month"] = pd.to_datetime(df["run_month"])
-    months = sorted(df["run_month"].dropna().unique())
-
-    if predict_month is None:
-        train_months = months[-(months_back + 1):-1]
-        predict_month = months[-1]
-    else:
-        idx = months.index(predict_month)
-        train_months = months[max(0, idx - months_back):idx]
-
-    features = [col for col in df.columns if col in input_keys]
-
-    train_df = df[df["run_month"].isin(train_months) & df[target].notna()]
-    test_df = df[df["run_month"] == predict_month]
-    test_df = test_df[test_df[features].notna().all(axis=1)]
-
-    # Remove duplicate columns in test_df
-    test_df = test_df.loc[:, ~test_df.columns.duplicated()]
-
-    return train_df, test_df, features
-
-
-def extract_input_matrix(df: pd.DataFrame, input_keys: list[str]) -> pd.DataFrame:
-    rows = []
-    for val in df["params_json"]:
-        try:
-            parsed = val if isinstance(val, dict) else json.loads(val)
-            rows.append({k: parsed.get(k, None) for k in input_keys})
-        except Exception:
-            rows.append({k: None for k in input_keys})
-    return pd.DataFrame(rows)
+import numpy as np
+from typing import Optional
+from optiview.data.join_tools import (
+    convert_to_prediction_dict,
+    insert_predictions,
+    get_training_features,
+    extract_input_matrix,
+    get_expert_name_for_run,
+)
+from optiview.engine.walk_forward.train import train_and_predict_profits
 
 
 def predict_optimal_config(
     df: pd.DataFrame,
-    predict_month: pd.Timestamp,
-    months_back: int = 1,
-    symbol: str = "EURUSD",
-    target: Literal["profit", "custom_score"] = "profit",
-    top_n: int = 3,
+    symbol: str,
+    predict_month: str,
+    months_back: int = 3,
+    target: str = "profit",
+    prediction_col: str = "predicted_profit",
+    prediction_error_penalty: float = 1.0,
     override_model: Optional[str] = None,
-) -> tuple[pd.DataFrame, list[str]]:
+) -> None:
     """
-    Predict the optimal configuration for a given symbol and month.
-    Returns:
-        - DataFrame with top configurations
-        - List of input features used for training
-    """
-    # 1. Prepare data
+    Predicts the best configuration for the next month using real ML model prediction.
 
-    input_keys = get_training_features(df)
-    train_df, test_df, features = prepare_train_test_split(
-        df, symbol, predict_month, months_back, target, input_keys
+    Args:
+        df: Training DataFrame containing historical backtest results.
+        symbol: Symbol to predict for.
+        predict_month: Target month for the prediction (format 'YYYY-MM').
+        months_back: How many months back to use for training.
+        target: Column name for realized profit.
+        prediction_col: Column name for predicted profit.
+        prediction_error_penalty: Weight of prediction error penalty.
+        override_model: Force override the model name if needed.
+    """
+    if df.empty:
+        raise ValueError(f"No training data available for {symbol}")
+
+    df = df.copy()
+    df["run_month"] = df["run_month"].astype(str)
+
+
+    available_months = sorted(
+        m for m in df["run_month"].dropna().unique() if m < predict_month
     )
 
-    if train_df.empty or test_df.empty:
-        print(f"⚠️ Skipping {symbol} for {predict_month.strftime('%Y-%m')} — no usable data")
-        return pd.DataFrame(), []
+    if not available_months:
+        raise ValueError(
+            f"No available backtest months for {symbol} before {predict_month}."
+        )
 
-    # 2. Train model
-    model_name = override_model or "xgb"
-    model = get_model(model_name)
+    if len(available_months) >= months_back:
+        train_months = available_months[-months_back:]
+    else:
+        train_months = available_months
 
-    X_train = extract_input_matrix(train_df, input_keys)
-    X_test = extract_input_matrix(test_df, input_keys)
+    train_df = df[df["run_month"].isin(train_months)].copy()
 
-    # Drop rows with missing input features
-    X_train = X_train.dropna()
-    train_df = train_df.reset_index(drop=True).loc[X_train.index]
+    if train_df.empty:
+        raise ValueError(f"No training data for {symbol} in the selected months.")
+
+    # Inject dummy model if missing
+    model_name = override_model if override_model else "xgb"
+    train_df["model"] = model_name
+
+    # Expand params_json into actual columns
+    input_keys = get_training_features(train_df)
+    X_inputs = extract_input_matrix(train_df, input_keys)
+    train_df = pd.concat(
+        [train_df.reset_index(drop=True), X_inputs.reset_index(drop=True)], axis=1
+    )
+
+    # Prepare training features and labels
+    X_train = train_df[input_keys]
     y_train = train_df[target]
 
-    X_test = X_test.dropna()
-    test_df = test_df.reset_index(drop=True).loc[X_test.index]
+    # Prepare test set: all configs for latest available month
+    latest_train_month = max(train_months)
+    test_df = df[df["run_month"] == latest_train_month].copy()
 
-
-    # Normalize and train
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-
-    model.fit(X_train_scaled, y_train)
-    test_df["predicted_profit"] = model.predict(X_test_scaled)
-
-    # 4. Select top configs
-    top_configs = (
-        test_df.sort_values("predicted_profit", ascending=False)
-        .head(top_n)
-        .reset_index(drop=True)
-    )
-    top_configs.insert(0, "rank", top_configs.index + 1)
-
-    # Load prior model quality scores
-    from optiview.data.loader import get_quality_scores
-    quality_df = get_quality_scores(symbol, model_name, predict_month.strftime("%Y-%m"), lookback=3)
-
-    confidence, score = estimate_confidence(
-        quality_scores_df=quality_df,
-        symbol=symbol,
-        model=model_name,
-        predict_month=predict_month,
-    )
-
-    top_configs["confidence_score"] = score
-    top_configs["confidence_stars"] = "★" * confidence + "☆" * (5 - confidence)
-
-    cols = list(top_configs.columns)
-    if "predicted_profit" in cols and "confidence_stars" in cols:
-        i = cols.index("predicted_profit")
-        cols = (
-            cols[: i + 1]
-            + ["confidence_stars"]
-            + [
-                col
-                for col in cols
-                if col not in {"confidence_stars"} or col == "predicted_profit"
-            ]
+    if test_df.empty:
+        raise ValueError(
+            f"No candidate configs available for prediction in {latest_train_month}."
         )
-        top_configs = top_configs[cols]
 
-    # Final deduplication before saving
-    top_configs = top_configs.loc[:, ~top_configs.columns.duplicated()]
+    X_test_inputs = extract_input_matrix(test_df, input_keys)
 
-    # 6. Add placeholders for evaluation and write output
-    save_prediction_outputs(top_configs, symbol, model_name, predict_month)
-
-    return top_configs, features
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Run month-ahead predictions.")
-    parser.add_argument(
-        "--month",
-        type=str,
-        required=True,
-        help="Training month in YYYY-MM format (e.g. 2025-02)",
-    )
-    parser.add_argument(
-        "--symbol",
-        type=str,
-        default=None,
-        help="Optionally restrict to a single symbol (e.g. GBPUSD)",
-    )
-    parser.add_argument(
-        "--target",
-        type=str,
-        choices=["profit", "custom_score"],
-        default="profit",
-        help="Which target to predict: profit (default) or custom_score",
-    )
-    parser.add_argument(
-        "--model",
-        choices=SUPPORTED_MODELS.keys(),
-        help="Optionally restrict to a single model (e.g. rf)",
+    # Predict profits for configs
+    predicted_profits = train_and_predict_profits(
+        X_train=X_train,
+        y_train=y_train,
+        X_test=X_test_inputs,
+        model_name=model_name,
     )
 
-    args = parser.parse_args()
+    # Attach predictions back to test DataFrame
+    test_df = test_df.reset_index(drop=True)
+    test_df["predicted_profit"] = predicted_profits.values
 
-    df = load_runs()
-    predict_month = pd.to_datetime(args.month + "-01")
-    symbols = df["symbol"].dropna().unique()
+    # Select the best predicted config
+    top_row = test_df.sort_values("predicted_profit", ascending=False).iloc[0]
 
-    model_names = [args.model] if args.model else SUPPORTED_MODELS.keys()
+    # Prepare and insert prediction
+    month_str = predict_month
 
-    for symbol in symbols:
-        if args.symbol and symbol != args.symbol:
-            continue
+    run_id_value = top_row.get("run_id")
+    run_id_int = (
+        int(run_id_value)
+        if run_id_value is not None and not pd.isna(run_id_value)
+        else None
+    )
 
-        for model in model_names:
-            print(f"\n🔮 Predicting for {symbol} with model {model}...")
-            top, features = predict_optimal_config(
-                df,
-                symbol=symbol,
-                predict_month=predict_month,
-                target=args.target,
-                override_model=model,
-                )
+    expert_name = (
+        get_expert_name_for_run(run_id_int) if run_id_int is not None else None
+    )
 
-            if top.empty:
-                print(f"⚠️ No predictions available for {symbol} ({model}) in {args.month}.")
-                continue
+    pred = convert_to_prediction_dict(
+        row=top_row,
+        symbol=symbol,
+        model_name=model_name,
+        month=month_str,
+        expert_name=expert_name,
+        confidence_score=None,  # To be filled after annotation
+        confidence_stars=None,  # To be filled after annotation
+        predicted_profit=float(top_row["predicted_profit"]),
+    )
 
-            if args.symbol:
-                print(top[[col for col in top.columns if col in features]])
+    insert_predictions([pred])
+
+    print(
+        f"✅ Saved prediction for {symbol} ({model_name}) into database for {month_str}."
+    )

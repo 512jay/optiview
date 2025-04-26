@@ -3,7 +3,7 @@
 
 .PHONY: annotations predictions view reset
 
-:
+predictions:
 	poetry run python src/optiview/engine/walk_forward/bulk_predict.py
 
 annotations:

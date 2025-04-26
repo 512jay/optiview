@@ -141,23 +141,31 @@ def insert_predictions(predictions: list[dict]) -> None:
 
 
 def convert_to_prediction_dict(
-    row: pd.Series, symbol: str, model: str, month: str
+    row: pd.Series,
+    symbol: str,
+    model_name: str,
+    month: str,
+    expert_name: Optional[str] = None,
+    confidence_score: Optional[float] = None,
+    confidence_stars: Optional[str] = None,
+    predicted_profit: Optional[float] = None,
 ) -> dict:
+    inputs_dict = {k: row[k] for k in row.index if k.startswith("input_")}
     return {
         "month": month,
         "symbol": symbol,
-        "model": ModelType(model),
-        "rank": int(row["rank"]),
-        "predicted_profit": float(row["predicted_profit"]),
-        "confidence_score": float(row.get("confidence_score", 0)),
-        "confidence_stars": row.get("confidence_stars"),
+        "model": model_name,
+        "rank": row.get("rank", 1),
+        "predicted_profit": predicted_profit,  # ✅ Use real predicted profit
+        "confidence_score": confidence_score,
+        "confidence_stars": confidence_stars,
         "actual_profit": None,
         "quality_score": None,
         "quality_stars": None,
-        "expert_name": None,  # Optionally filled by `get_expert_name_for_run`
-        "inputs": {k: row[k] for k in sorted(row.index) if k.startswith("input_")},
-        "run_id": int(row["id"]) if "id" in row else None,
-        "tags": [],
+        "expert_name": expert_name,
+        "inputs": json.dumps(inputs_dict),
+        "run_id": row.get("run_id"),
+        "tags": "[]",
         "notes": None,
     }
 
@@ -181,3 +189,45 @@ def save_prediction_outputs(
     print(
         f"✅ Saved {len(predictions)} predictions for {symbol} ({model_name}) into database."
     )
+
+
+def extract_input_matrix(df: pd.DataFrame, input_keys: list[str]) -> pd.DataFrame:
+    """
+    Expand params_json into a dataframe of input columns.
+
+    Args:
+        df: DataFrame containing params_json field
+        input_keys: List of expected input keys
+
+    Returns:
+        A DataFrame with input columns.
+    """
+    parsed_rows = []
+
+    for val in df["params_json"].dropna():
+        try:
+            parsed = val if isinstance(val, dict) else json.loads(val)
+            if not isinstance(parsed, dict):
+                parsed = {}
+        except Exception:
+            parsed = {}
+
+        row = {k: parsed.get(k, None) for k in input_keys}
+        parsed_rows.append(row)
+
+    return pd.DataFrame(parsed_rows, index=df.index)
+
+
+def get_training_features(df: pd.DataFrame) -> list[str]:
+    """
+    Extract list of input keys from the first non-null params_json in the dataframe.
+    Assumes params_json is a JSON string or a dict.
+    """
+    for val in df["params_json"].dropna():
+        try:
+            parsed = val if isinstance(val, dict) else json.loads(val)
+            if isinstance(parsed, dict):
+                return list(parsed.keys())
+        except Exception:
+            continue
+    raise ValueError("No valid params_json found in training dataframe.")

@@ -25,6 +25,7 @@ def load_runs() -> pd.DataFrame:
     conn = sqlite3.connect(str(db_path))
     try:
         df = pd.read_sql("SELECT * FROM runs", conn)
+        df = df.rename(columns={"id": "run_id"})
         return df
     finally:
         conn.close()

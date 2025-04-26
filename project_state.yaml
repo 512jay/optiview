@@ -1,6 +1,8 @@
 project_name: OptiView
 last_updated: '2025-04-25'
+
 current_phase: walk-forward prediction + evaluation
+
 status:
   data_ingestion: complete
   model_training: complete
@@ -8,28 +10,43 @@ status:
   quality_scoring: complete
   annotation_pipeline: complete
   database_transition: complete
-  streamlit_ui: not started
+  streamlit_ui: in_progress
   ini_export: tabled
   confidence_visualization: partial
   config_quality_dashboard: tabled
+
+phases:
+  streamlit_ui:
+    - Phase 1: Foundation and Skeleton
+    - Phase 2: View Predictions Tab (MVP)
+    - Phase 3: Visual Confidence + Quality Metrics
+    - Phase 4: Interactivity & Edits
+    - Phase 5: Model Evaluation Insights
+    - Phase 6: Polish + QA
+
 next_tasks:
-- Build Streamlit View tab
-- Show prediction confidence + quality stars
-- 'Add filters: symbol, model, date'
-- Add note/tag editing
+  - Build Streamlit UI initial skeleton (entry point, tabs, db connection)
+  - Implement View Predictions tab (filters + table display)
+  - Add prediction confidence and quality stars
+  - Implement note/tag editing per prediction
+  - Build Model Evaluation Insights (quality histogram, summary table)
+  - Polish Streamlit UI (modularization, mypy compliance, visual QA)
+
 tabled_ideas:
-- config_quality_histogram
-- auto-evaluate next month profit delta
-- streamlit leaderboard tab
+  - config_quality_histogram
+  - auto-evaluate next month profit delta
+  - streamlit leaderboard tab
+
 tools_used:
-- Python 3.13
-- Poetry
-- SQLite (optiview.db)
-- SQLAlchemy ORM
-- MetaTrader5 (external)
-- Streamlit (planned)
+  - Python 3.13
+  - Poetry
+  - SQLite (optiview.db)
+  - SQLAlchemy ORM
+  - MetaTrader5 (external)
+  - Streamlit (planned)
+
 principles:
-- all data comes from database (no more .parquet/.csv)
-- models must be EA-agnostic (no input_ assumption)
-- annotation always recomputes
-- all code mypy compliant
+  - all data comes from database (no more .parquet/.csv)
+  - models must be EA-agnostic (no input_ assumption)
+  - annotation always recomputes
+  - all code mypy compliant

@@ -1,42 +1,95 @@
-# 📁 src/optiview/engine/walk_forward/bulk_predict.py
+# File: src/optiview/engine/walk_forward/bulk_predict.py
 
+import argparse
 import pandas as pd
-from pathlib import Path
-from optiview.engine.walk_forward.predict import (
-    predict_optimal_config,
-    SUPPORTED_MODELS,
-)
+from optiview.engine.walk_forward.predict import predict_optimal_config
 from optiview.data.loader import load_runs
+from optiview.maintenance.missing_months_report import generate_missing_months_report
 
 
 def main() -> None:
-    # Load the full optimization dataset
+    parser = argparse.ArgumentParser(description="Run bulk predictions.")
+    parser.add_argument(
+        "--months_back",
+        type=int,
+        default=3,
+        help="How many months back to use for training.",
+    )
+    parser.add_argument(
+        "--target", type=str, default="profit", help="Target column name."
+    )
+    parser.add_argument(
+        "--prediction_col",
+        type=str,
+        default="predicted_profit",
+        help="Prediction column name.",
+    )
+    parser.add_argument(
+        "--prediction_error_penalty",
+        type=float,
+        default=1.0,
+        help="Penalty weight for prediction error.",
+    )
+    args = parser.parse_args()
+
+    print("🔄 Starting automatic bulk prediction process...")
+
     df = load_runs()
-    symbols = df["symbol"].dropna().unique()
-    months = sorted(df["run_month"].dropna().unique())
 
-    # Skip the final month since we don't have future data for evaluation
-    predictable_months = months[1:]
+    if df.empty:
+        print("❌ No runs found to predict from.")
+        return
 
-    for model_name in SUPPORTED_MODELS.keys():
-        print(f"\n📦 MODEL: {model_name.upper()}")
+    symbols = sorted(df["symbol"].unique())
 
-        for month in predictable_months:
-            month_str = pd.to_datetime(month).strftime("%Y-%m")
-            for symbol in symbols:
-                print(f"🔮 Predicting: {symbol} for {month_str} ...")
+    models = ["xgb", "rf", "cat", "lgbm", "gbr", "histgb"]
 
-                try:
-                    predict_optimal_config(
-                        df,
-                        symbol=symbol,
-                        predict_month=pd.to_datetime(month_str + "-01"),
-                        target="profit",
-                        override_model=model_name,
-                    )
-                except Exception as e:
-                    print(f"❌ Failed: {symbol} {month_str} ({model_name}) → {e}")
+    # Automatically detect next month to predict
+    all_months = pd.to_datetime(df["run_month"].dropna().unique())
+    if all_months.empty:
+        print("❌ No historical months available.")
+        return
+
+    latest_month = all_months.max()
+    predict_month = (latest_month + pd.offsets.MonthBegin(1)).strftime("%Y-%m")
+
+    for symbol in symbols:
+        symbol_runs = df[df["symbol"] == symbol]
+
+        if symbol_runs.empty:
+            print(f"⚠️ No data for symbol: {symbol}")
+            continue
+
+        for model in models:
+            print(f"🔮 Predicting {symbol} ({model}) for {predict_month}...")
+
+            try:
+                predict_optimal_config(
+                    df=symbol_runs,
+                    symbol=symbol,
+                    predict_month=predict_month,
+                    months_back=args.months_back,
+                    target=args.target,
+                    prediction_col=args.prediction_col,
+                    prediction_error_penalty=args.prediction_error_penalty,
+                    override_model=model,
+                )
+            except Exception as e:
+                print(f"❌ Prediction failed for {symbol} ({model}): {e}")
+
+    print("✅ Bulk prediction complete.\n")
+
+    print("🧹 Checking for missing prediction months...")
 
 
 if __name__ == "__main__":
     main()
+    print("\n🧹 Checking for missing prediction months...")
+
+    report = generate_missing_months_report(lookback_months=12)
+
+    if report.empty:
+        print("✅ No missing months detected.")
+    else:
+        print("⚠️ Missing months detected:")
+        print(report.to_string(index=False))
