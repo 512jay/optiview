@@ -1,35 +1,37 @@
 # File: src/optiview/maintenance/missing_months_report.py
 
-import pandas as pd
-from sqlalchemy import select, distinct
-from sqlalchemy.orm import Session
-from optiview.data.db_path import get_optiview_db_path
-from optiview.data.models import PredictedConfig
-from sqlalchemy import create_engine
+"""Generate reports for missing prediction months in OptiView database."""
+
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Optional
 
+import pandas as pd
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from optiview.data.db_path import get_optiview_db_path
+from optiview.data.models import PredictedSetting
+
+
 def generate_missing_months_report(lookback_months: int = 12) -> pd.DataFrame:
-    """
-    Scans predicted_configs and reports missing months per (symbol, expert_name).
-    
+    """Scan predicted_settings and report missing months per (symbol, expert_name).
+
     Args:
-        lookback_months: How many months back from today to check.
+        lookback_months (int): How many months back from today to check.
 
     Returns:
-        DataFrame with missing months per (symbol, expert_name).
+        pd.DataFrame: DataFrame with missing months per (symbol, expert_name).
     """
     engine = create_engine(f"sqlite:///{get_optiview_db_path()}", future=True)
 
     with Session(engine) as session:
-        stmt = (
-            select(
-                PredictedConfig.symbol,
-                PredictedConfig.expert_name,
-                PredictedConfig.month,
-            )
-            .where(PredictedConfig.month.is_not(None))
-        )
+        stmt = select(
+            PredictedSetting.symbol,
+            PredictedSetting.expert_name,
+            PredictedSetting.month,
+        ).where(PredictedSetting.month.is_not(None))
         result = session.execute(stmt).all()
 
     df = pd.DataFrame(result, columns=["symbol", "expert_name", "month"])
@@ -42,9 +44,9 @@ def generate_missing_months_report(lookback_months: int = 12) -> pd.DataFrame:
     cutoff = now.replace(day=1) - pd.DateOffset(months=lookback_months)
     df = df[df["month"] >= cutoff]
 
-    expected_months = pd.date_range(
-        start=cutoff, end=now, freq="MS"
-    ).strftime("%Y-%m").tolist()
+    expected_months = (
+        pd.date_range(start=cutoff, end=now, freq="MS").strftime("%Y-%m").tolist()
+    )
 
     # Build missing report
     report = []
@@ -52,13 +54,16 @@ def generate_missing_months_report(lookback_months: int = 12) -> pd.DataFrame:
         actual_months = group["month"].dt.strftime("%Y-%m").tolist()
         missing = sorted(set(expected_months) - set(actual_months))
         if missing:
-            report.append({
-                "symbol": symbol,
-                "expert_name": expert_name,
-                "missing_months": ", ".join(missing),
-            })
+            report.append(
+                {
+                    "symbol": symbol,
+                    "expert_name": expert_name,
+                    "missing_months": ", ".join(missing),
+                }
+            )
 
     return pd.DataFrame(report)
+
 
 if __name__ == "__main__":
     report = generate_missing_months_report(lookback_months=12)
