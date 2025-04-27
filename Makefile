@@ -18,7 +18,7 @@ view:
 reset:
 	rm src/optiview/data/optiview.db
 	poetry run python scripts/init_db.py
-	make predict
+	make bulk
 	make evaluate
 
 init:

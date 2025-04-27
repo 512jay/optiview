@@ -1,25 +1,35 @@
 # File: src/optiview/engine/walk_forward/bulk_predict.py
 
+"""Bulk prediction generator for OptiView.
+
+Scans historical backtest data, trains models, and saves predictions
+for the next month(s) for each symbol.
+"""
+
+from __future__ import annotations
+
 import argparse
-import pandas as pd
 from typing import List
-from optiview.engine.walk_forward.predict import predict_optimal_config
+
+import pandas as pd
+
 from optiview.data.loader import load_runs
+from optiview.engine.walk_forward.predict import predict_optimal_config
 from optiview.maintenance.missing_months_report import generate_missing_months_report
 
 
 def find_predictable_months_for_symbol(
-    symbol_runs: pd.DataFrame, min_history: int = 3
+    symbol_runs: pd.DataFrame,
+    min_history: int = 3,
 ) -> List[str]:
-    """
-    Find months for which we can predict, for a given symbol's historical runs.
+    """Find months eligible for prediction for a given symbol.
 
     Args:
-        symbol_runs (pd.DataFrame): DataFrame containing runs for a single symbol.
-        min_history (int): Minimum number of past months required to predict.
+        symbol_runs (pd.DataFrame): DataFrame of historical runs for a symbol.
+        min_history (int): Minimum number of historical months required.
 
     Returns:
-        List[str]: List of months ("YYYY-MM") eligible for prediction.
+        List[str]: List of predictable months ("YYYY-MM").
     """
     months = symbol_runs["run_month"].dropna().unique()
     months_sorted = sorted(months)
@@ -31,6 +41,7 @@ def find_predictable_months_for_symbol(
 
 
 def main() -> None:
+    """Main entrypoint for running bulk predictions."""
     parser = argparse.ArgumentParser(description="Run bulk predictions.")
     parser.add_argument(
         "--months_back",
@@ -42,24 +53,12 @@ def main() -> None:
         "--target",
         type=str,
         default="profit",
-        help="Target column name.",
-    )
-    parser.add_argument(
-        "--prediction_col",
-        type=str,
-        default="predicted_profit",
-        help="Prediction column name.",
-    )
-    parser.add_argument(
-        "--prediction_error_penalty",
-        type=float,
-        default=1.0,
-        help="Penalty weight for prediction error.",
+        help="Target column name for training.",
     )
     parser.add_argument(
         "--full-history",
         action="store_true",
-        help="Predict across all months instead of only the latest month.",
+        help="Predict across all months (default: only next month).",
     )
     args = parser.parse_args()
 
@@ -107,16 +106,13 @@ def main() -> None:
         for predict_month in predict_months:
             for model in models:
                 print(f"🔮 Predicting {symbol} ({model}) for {predict_month}...")
-
                 try:
                     predict_optimal_config(
                         df=symbol_runs,
                         symbol=symbol,
-                        predict_month=predict_month,  # ✅ Passed as a string, no Timestamp
+                        predict_month=predict_month,
                         months_back=args.months_back,
                         target=args.target,
-                        prediction_col=args.prediction_col,
-                        prediction_error_penalty=args.prediction_error_penalty,
                         override_model=model,
                     )
                 except Exception as e:
