@@ -31,8 +31,8 @@ class ModelType(enum.Enum):
     cat = "cat"
 
 
-class PredictedConfig(Base):
-    __tablename__ = "predicted_configs"
+class PredictedSetting(Base):
+    __tablename__ = "predicted_settings"
 
     # --- Composite Primary Key ---
     month: Mapped[str] = mapped_column(String)  # e.g. '2025-03'
@@ -46,11 +46,6 @@ class PredictedConfig(Base):
     predicted_profit: Mapped[float]
     confidence_score: Mapped[Optional[float]]  # 0.0 - 1.0 confidence score
     confidence_stars: Mapped[Optional[str]]  # e.g. '★★★☆☆'
-
-    # --- Evaluation Results (post-backtest) ---
-    actual_profit: Mapped[Optional[float]]  # Realized profit (if known)
-    quality_score: Mapped[Optional[float]]  # Backtested quality score (if known)
-    quality_stars: Mapped[Optional[str]]  # e.g. '★★★★☆'
 
     # --- Strategy Metadata ---
     expert_name: Mapped[Optional[str]]  # EA name (display only)
@@ -72,3 +67,40 @@ class PredictedConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class EvaluatedSetting(Base):
+    """Evaluation results linked to a predicted configuration."""
+
+    __tablename__ = "evaluated_settings"
+
+    # --- Primary Key ---
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # --- Link to Prediction ---
+    month: Mapped[str] = mapped_column(String)  # Redundant for easy JOINs
+    symbol: Mapped[str] = mapped_column(String)
+    model: Mapped[ModelType] = mapped_column(Enum(ModelType))
+    rank: Mapped[int] = mapped_column()
+
+    # --- Evaluation Version Info ---
+    evaluator_version: Mapped[str] = mapped_column(
+        String
+    )  # e.g. 'baseline_v1', 'v2_experiment'
+
+    # --- Evaluation Metrics ---
+    quality_score: Mapped[Optional[float]]  # Final backtested quality
+    quality_stars: Mapped[Optional[str]]  # e.g. '★★★☆☆'
+    confidence_score: Mapped[Optional[float]]  # Predicted confidence at eval time
+    confidence_stars: Mapped[Optional[str]]  # e.g. '★★★★☆'
+
+    # --- Metadata ---
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Human notes
+    metrics_json: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True
+    )  # Future metrics
+
+    # --- Audit Info ---
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (PrimaryKeyConstraint("id"),)

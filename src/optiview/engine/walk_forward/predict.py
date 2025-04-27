@@ -10,7 +10,7 @@ from optiview.data.join_tools import (
     extract_input_matrix,
     get_expert_name_for_run,
 )
-from optiview.engine.walk_forward.train import train_and_predict_profits
+from optiview.engine.walk_forward.train_model import train_and_predict_profits
 
 
 def predict_optimal_config(
@@ -19,29 +19,34 @@ def predict_optimal_config(
     predict_month: str,
     months_back: int = 3,
     target: str = "profit",
-    prediction_col: str = "predicted_profit",
-    prediction_error_penalty: float = 1.0,
     override_model: Optional[str] = None,
 ) -> None:
     """
-    Predicts the best configuration for the next month using real ML model prediction.
+    Predicts the optimal EA input setting for a given symbol and month.
+
+    Trains a machine learning model using past backtest results and predicts the
+    best-performing configuration for the specified future month.
 
     Args:
-        df: Training DataFrame containing historical backtest results.
-        symbol: Symbol to predict for.
-        predict_month: Target month for the prediction (format 'YYYY-MM').
-        months_back: How many months back to use for training.
-        target: Column name for realized profit.
-        prediction_col: Column name for predicted profit.
-        prediction_error_penalty: Weight of prediction error penalty.
-        override_model: Force override the model name if needed.
+        df (pd.DataFrame): Historical backtest results, including input parameters and profit metrics.
+        symbol (str): Trading symbol to predict (e.g., "EURUSD").
+        predict_month (str): Target month to predict for, in format "YYYY-MM".
+        months_back (int, optional): Number of past months to use for training. Defaults to 3.
+        target (str, optional): Column name for realized profit to train on. Defaults to "profit".
+        override_model (Optional[str], optional): Model name to override default. Defaults to None.
+
+    Raises:
+        ValueError: If training data or candidate configurations are insufficient.
+
+    Returns:
+        None
     """
+
     if df.empty:
         raise ValueError(f"No training data available for {symbol}")
 
     df = df.copy()
     df["run_month"] = df["run_month"].astype(str)
-
 
     available_months = sorted(
         m for m in df["run_month"].dropna().unique() if m < predict_month
