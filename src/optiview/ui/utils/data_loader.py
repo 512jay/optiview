@@ -1,33 +1,34 @@
-"""File: src/optiview/ui/utils/data_loader.py
-Handles database access and caching.
-"""
+# File: src/optiview/ui/utils/data_loader.py
+
+"""Handles database access and caching for the Streamlit UI."""
 
 import pandas as pd
 import streamlit as st
 
-# Placeholder for database connection (adjust to your db module)
-from optiview.db import query_symbols, query_months, query_models, query_predictions
+from optiview.database.query import (
+    get_predictions_for_month,
+    get_available_prediction_months,
+)
 
 
 @st.cache_data
-def get_symbols() -> list[str]:
-    """Returns available trading symbols."""
-    return query_symbols()
+def load_predictions_for_month(month: str) -> pd.DataFrame:
+    """Load predictions and evaluations for a month.
+
+    Args:
+        month (str): Month to load.
+
+    Returns:
+        pd.DataFrame: Joined predictions + evaluations.
+    """
+    return get_predictions_for_month(month)
 
 
 @st.cache_data
-def get_months_for_symbol(symbol: str) -> list[str]:
-    """Returns available months for a given symbol."""
-    return query_months(symbol)
+def load_available_prediction_months() -> list[str]:
+    """Load available prediction months.
 
-
-@st.cache_data
-def get_models() -> list[str]:
-    """Returns available prediction models."""
-    return query_models()
-
-
-@st.cache_data
-def load_predictions(symbol: str, month: str, model: str) -> pd.DataFrame:
-    """Loads predictions for the selected symbol, month, and model."""
-    return query_predictions(symbol, month, model)
+    Returns:
+        list[str]: List of months in 'YYYY-MM' format.
+    """
+    return get_available_prediction_months()

@@ -128,3 +128,19 @@ class SyncedJob(Base):
     tester_inputs: Mapped[dict[str, Any]] = mapped_column(JSON)
 
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+# --- Tuning Settings Models ---
+class TuningSettings(Base):
+    """Stores versioned tuning settings for confidence and evaluation scoring."""
+
+    __tablename__ = "tuning_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[str] = mapped_column(
+        String, nullable=False
+    )  # ISO8601 UTC timestamp
+    version_name: Mapped[str] = mapped_column(String, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    confidence_settings_json: Mapped[str] = mapped_column(String, nullable=False)
+    evaluation_settings_json: Mapped[str] = mapped_column(String, nullable=False)

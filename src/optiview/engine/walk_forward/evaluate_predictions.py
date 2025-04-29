@@ -1,74 +1,70 @@
 # File: src/optiview/engine/walk_forward/evaluate_predictions.py
 
-"""Evaluate predictions and insert results into EvaluatedSetting."""
+"""Evaluate predictions by comparing to actual runs from the same month.
 
-from pathlib import Path
+This version aligns with:
+- OptiView architecture: predictions are stored in the evaluation month
+- Realistic scaling: loads runs symbol-by-month
+- Correct input matching: parses params_json and filters only input fields
+"""
+
 from typing import Optional
+import json
+
 import pandas as pd
-import sqlite3
-
-from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
 
-from optiview.database.db_paths import get_optiview_db_path, get_optibatch_db_path
+from optiview.database.db_paths import get_optiview_db_path
 from optiview.database.models import PredictedSetting, EvaluatedSetting
+from optiview.database.loader import load_symbol_months_runs
+from optiview.engine.walk_forward.time_utils import get_current_month
 
-# Constants
-INPUT_TOLERANCE = 1e-4
+# --- Config ---
+INPUT_TOLERANCE = 0.05
 EVALUATOR_VERSION = "baseline_v1"
 
-# --- Loading Functions ---
 
+def match_prediction(
+    predicted_inputs: dict, actual_runs: list[dict]
+) -> Optional[float]:
+    """Find the actual profit from runs that closely match predicted strategy parameters.
 
-def load_all_runs() -> list[dict]:
-    """Load all OptiBatch runs from the external database."""
-    db_path = get_optibatch_db_path()
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM runs").fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    Args:
+        predicted_inputs (dict): Predicted configuration inputs.
+        actual_runs (list[dict]): List of run records from the evaluation month.
 
+    Returns:
+        Optional[float]: Actual run profit if match is found, otherwise None.
+    """
+    # Only keep relevant 'input_' fields from prediction
+    filtered_predicted_inputs = {
+        k: v for k, v in predicted_inputs.items() if k.startswith("input_")
+    }
 
-def load_predicted_settings() -> list[PredictedSetting]:
-    """Load all predicted settings from the OptiView database."""
-    engine = create_engine(f"sqlite:///{get_optiview_db_path()}", future=True)
-    with Session(engine) as session:
-        stmt = select(PredictedSetting)
-        return list(session.execute(stmt).scalars().all())
+    for run in actual_runs:
+        params_json = run.get("params_json")
+        if not params_json:
+            continue
 
+        try:
+            actual_inputs = json.loads(params_json)
+        except Exception:
+            continue
 
-# --- Matching Functions ---
+        mismatches = []
+        for k in filtered_predicted_inputs:
+            if k in actual_inputs and isinstance(actual_inputs[k], (int, float)):
+                diff = abs(filtered_predicted_inputs[k] - actual_inputs[k])
+                if diff > INPUT_TOLERANCE:
+                    mismatches.append(
+                        (k, filtered_predicted_inputs[k], actual_inputs[k], diff)
+                    )
 
+        if not mismatches:
+            return run.get("profit")
 
-def get_next_month_runs(all_runs: list[dict], symbol: str, month: str) -> list[dict]:
-    """Filter runs to only the full next month runs for a given symbol."""
-    next_month = pd.to_datetime(month) + pd.DateOffset(months=1)
-    start = next_month.replace(day=1).strftime("%Y-%m-%d")
-    end = (next_month + pd.offsets.MonthEnd(0)).strftime("%Y-%m-%d")
-    return [
-        r
-        for r in all_runs
-        if r["symbol"] == symbol
-        and r["start_date"] == start
-        and r["end_date"] == end
-        and r["is_full_month"] == 1
-    ]
-
-
-def match_prediction(inputs: dict, next_runs: list[dict]) -> Optional[float]:
-    """Find matching actual profit for predicted inputs."""
-    for r in next_runs:
-        if all(
-            abs(inputs.get(k, 0) - r.get(k, 0)) <= INPUT_TOLERANCE
-            for k in inputs
-            if isinstance(r.get(k, None), (int, float))
-        ):
-            return r.get("profit")
     return None
-
-
-# --- Evaluation Functions ---
 
 
 def compute_quality_score(
@@ -92,60 +88,65 @@ def quality_to_stars(score: float) -> str:
     return "★" * count + "☆" * (5 - count)
 
 
-# --- Main Evaluation Pipeline ---
-
-
 def evaluate_predictions() -> None:
-    """Evaluate all predictions and insert evaluations."""
+    """Evaluate all predicted settings and store evaluation results."""
     engine = create_engine(f"sqlite:///{get_optiview_db_path()}", future=True)
-    all_runs = load_all_runs()
-    predicted_settings = load_predicted_settings()
 
-    print(f"🧠 Evaluating {len(predicted_settings)} predicted settings...")
+    with Session(engine) as session:
+        predictions: list[PredictedSetting] = (
+            session.query(PredictedSetting)
+            .order_by(PredictedSetting.symbol, PredictedSetting.month)
+            .all()
+        )
 
-    new_evaluations = []
+    print(f"🧠 Evaluating {len(predictions)} predicted settings...")
 
-    for pred in predicted_settings:
-        symbol = pred.symbol
-        month = pred.month
-        next_runs = get_next_month_runs(all_runs, symbol, month)
+    current_month = get_current_month()
+    evaluations: list[EvaluatedSetting] = []
 
-        if not next_runs:
+    for pred in predictions:
+        if pred.month >= current_month:
+            continue  # Don't evaluate current or future predictions
+
+        runs_df = load_symbol_months_runs(pred.symbol, [pred.month])
+        if runs_df.empty:
             continue
 
-        actual_profit = match_prediction(pred.inputs or {}, next_runs)
+        actual_profit = match_prediction(pred.inputs or {}, runs_df.to_dict("records"))
+        if actual_profit is None:
+            continue
 
-        if actual_profit is not None:
-            all_profits = [r["profit"] for r in next_runs if "profit" in r]
-            quality_score = compute_quality_score(
-                pred.predicted_profit, actual_profit, all_profits
-            )
-            quality_stars = quality_to_stars(quality_score)
+        all_profits = runs_df["profit"].dropna().tolist()
+        quality_score = compute_quality_score(
+            pred.predicted_profit, actual_profit, all_profits
+        )
+        quality_stars = quality_to_stars(quality_score)
 
-            eval_row = EvaluatedSetting(
-                month=pred.month,
-                symbol=pred.symbol,
-                model=pred.model,
-                rank=pred.rank,
-                evaluator_version=EVALUATOR_VERSION,
-                quality_score=quality_score,
-                quality_stars=quality_stars,
-                confidence_score=pred.confidence_score,
-                confidence_stars=pred.confidence_stars,
-                notes=None,
-                metrics_json=None,
-            )
-            new_evaluations.append(eval_row)
+        evaluation = EvaluatedSetting(
+            month=pred.month,
+            symbol=pred.symbol,
+            model=pred.model,
+            rank=pred.rank,
+            evaluator_version=EVALUATOR_VERSION,
+            quality_score=quality_score,
+            quality_stars=quality_stars,
+            confidence_score=pred.confidence_score,
+            confidence_stars=pred.confidence_stars,
+            notes=None,
+            metrics_json=None,
+        )
+        evaluations.append(evaluation)
 
-    # Insert new evaluations
+    if not evaluations:
+        print("⚠️ No matching evaluations found.")
+        return
+
     with Session(engine) as session:
-        session.add_all(new_evaluations)
+        session.add_all(evaluations)
         session.commit()
 
-    print(f"✅ Done: Inserted {len(new_evaluations)} evaluated settings.")
+    print(f"✅ Done: Inserted {len(evaluations)} evaluated settings.")
 
-
-# --- CLI Entrypoint ---
 
 if __name__ == "__main__":
     evaluate_predictions()

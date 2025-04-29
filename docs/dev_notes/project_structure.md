@@ -1,7 +1,7 @@
 <!-- AUTO-GENERATED FILE - DO NOT EDIT -->
 # 🗂️ OptiView Project Structure
 
-_Generated on 2025-04-28 09:50:59_
+_Generated on 2025-04-29 02:32:00_
 
 - 📂 .streamlit/
   - 📄 config.toml
@@ -35,6 +35,9 @@ _Generated on 2025-04-28 09:50:59_
     - 📄 [bulk_predict.md](../user_guide/bulk_predict.md)
     - 📄 [maintenance.md](../user_guide/maintenance.md)
     - 📄 [theory_and_setup.md](../user_guide/theory_and_setup.md)
+- 📂 generated/
+  - 📂 health_check/
+    - 📄 optibatch_health_report.csv
 - 📄 mkdocs.yml
 - 📄 mypy.ini
 - 📄 poetry.lock
@@ -45,6 +48,7 @@ _Generated on 2025-04-28 09:50:59_
     - 📄 get_db_path.py
     - 📄 init_db.py
   - 📂 maintenance/
+    - 📄 health_check_optibatch.py
     - 📄 sync_jobs.py
 - 📂 src/
   - 📂 optiview/
@@ -64,6 +68,7 @@ _Generated on 2025-04-28 09:50:59_
         - 📄 model_configs.py
         - 📄 predict.py
         - 📄 scoring_helpers.py
+        - 📄 time_utils.py
         - 📄 train_model.py
     - 📂 maintenance/
       - 📄 missing_months_report.py
@@ -78,6 +83,7 @@ _Generated on 2025-04-28 09:50:59_
         - 📄 header.py
       - 📂 pages/
         - 📄 01_View_Predictions.py
+        - 📄 03_Admin_Tools.py
       - 📂 utils/
         - 📄 data_loader.py
     - 📂 viz/
