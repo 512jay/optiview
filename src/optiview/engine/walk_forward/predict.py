@@ -282,7 +282,7 @@ def predict_optimal_config(
 
     insert_predictions([pred_entry])
     print(
-        f"🔮 Predicting {symbol} {predict_month} ({model_name})... profit: ${top_row.get('predicted_profit'):.2f}"
+        f"🔮 Predicting {symbol:<8} {predict_month} ({model_name:<6}) → profit: ${top_row.get('predicted_profit'):7.2f} {confidence_stars}"
     )
 
 
@@ -330,7 +330,7 @@ def expand_testerinputs(
     return df, X_inputs, input_columns
 
 
-def safe_jsonify_dict(d: dict[Hashable, Any]) -> dict[str, Any]:
+def safe_jsonify_dict(d: dict[Any, Any]) -> dict[str, Any]:
     """
     Convert numpy types inside dictionary to pure Python types recursively.
 

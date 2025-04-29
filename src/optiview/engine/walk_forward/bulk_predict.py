@@ -111,8 +111,8 @@ def bulk_predict(full_history: bool = False, months_back: int = 3) -> None:
     """Bulk predict optimal configurations for multiple symbols and months.
 
     Args:
-        full_history: If True, predict for all historical months possible.
-                      If False, predict for the next upcoming month only.
+        full_history: If True, predict for all historical months and the next month.
+                      If False, predict only for the next upcoming month.
         months_back: How many previous months to use when training the model.
     """
     print("🔄 Starting bulk prediction process...")
@@ -127,12 +127,12 @@ def bulk_predict(full_history: bool = False, months_back: int = 3) -> None:
             print(f"⚠️ Not enough historical months for {symbol}. Skipping.")
             continue
 
-        # Determine which months to predict
+        latest_month = available_months[-1]
+        next_month = get_next_month(latest_month)
+
         if full_history:
-            target_months = available_months[months_back:]
+            target_months = available_months[months_back:] + [next_month]
         else:
-            latest_month = available_months[-1]
-            next_month = get_next_month(latest_month)
             target_months = [next_month]
 
         for predict_month in target_months:
@@ -156,10 +156,8 @@ def bulk_predict(full_history: bool = False, months_back: int = 3) -> None:
                 print(f"⚠️ No runs loaded for {symbol} in {months_to_load}. Skipping.")
                 continue
 
-            # Predict across all supported models
             for model in ["xgb", "rf", "cat", "lgbm", "gbr", "histgb"]:
                 try:
-                    print(f"🔮 Predicting {symbol} {predict_month} ({model})...")
                     predict_optimal_config(
                         df=runs_df,
                         symbol=symbol,
