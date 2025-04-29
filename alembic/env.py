@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 from alembic import context
-from optiview.data.models import Base
-from optiview.data.db_path import get_optiview_db_path
+from optiview.database.models import Base
+from optiview.database.db_paths import get_optiview_db_path
 from sqlalchemy import create_engine
 
 # this is the Alembic Config object, which provides

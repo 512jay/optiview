@@ -1,177 +1,81 @@
 # File: src/optiview/data/join_tools.py
 
-"""Utility functions for joining OptiBatch metadata with OptiView predictions."""
+"""Utilities for joining predictions with metadata, database helpers, and INI generation."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from typing import Any, Optional
 
 import pandas as pd
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from optiview.data.db_path import get_optiview_db_path, get_optibatch_db_path
-from optiview.data.models import Base, PredictedSetting, ModelType
+from optiview.database.models import PredictedSetting
+from optiview.database.session import get_optiview_session
 
 
-# --- Database Helpers ---
-
-
-def get_metadata_for_run(run_id: int) -> Optional[dict]:
-    """Fetch full metadata for a given run_id from OptiBatch.
+# --- Database Utilities ---
+def insert_predictions(predictions: list[dict[str, Any]]) -> None:
+    """Insert a list of predicted settings into the database.
 
     Args:
-        run_id (int): Run ID to fetch metadata for.
-
-    Returns:
-        Optional[dict]: Dictionary of metadata fields, or None if not found.
-    """
-    conn = sqlite3.connect(get_optiview_db_path())
-    conn.execute(f"ATTACH DATABASE '{get_optibatch_db_path()}' AS optibatch")
-
-    query = """
-    SELECT 
-        r.id AS run_id,
-        r.symbol,
-        r.start_date,
-        r.end_date,
-        r.run_month,
-        r.pass_number,
-        r.params_json,
-        j.expert_name,
-        j.expert_path,
-        j.period,
-        j.deposit,
-        j.currency,
-        j.leverage,
-        j.model AS optimization_model,
-        j.optimization_criterion
-    FROM optibatch.runs r
-    JOIN optibatch.jobs j ON r.job_id = j.id
-    WHERE r.id = ?
-    """
-
-    try:
-        row = pd.read_sql_query(query, conn, params=(run_id,)).to_dict(orient="records")
-        return row[0] if row else None
-    finally:
-        conn.close()
-
-
-def get_expert_name_for_run(run_id: int) -> Optional[str]:
-    """Quickly fetch just the expert_name for a given run_id.
-
-    Args:
-        run_id (int): Run ID.
-
-    Returns:
-        Optional[str]: Expert advisor name if found.
-    """
-    metadata = get_metadata_for_run(run_id)
-    return metadata.get("expert_name") if metadata else None
-
-
-# --- .ini Helpers ---
-
-
-def get_ini_data_for_run(run_id: int) -> Optional[dict]:
-    """Prepare .ini-compatible fields for a given run.
-
-    Args:
-        run_id (int): Run ID.
-
-    Returns:
-        Optional[dict]: Dictionary structured as Tester and TesterInputs sections.
-    """
-    meta = get_metadata_for_run(run_id)
-    if not meta:
-        return None
-
-    try:
-        inputs = (
-            json.loads(meta["params_json"])
-            if isinstance(meta["params_json"], str)
-            else meta["params_json"]
-        )
-    except Exception:
-        inputs = {}
-
-    return {
-        "Tester": {
-            "Expert": meta["expert_path"],
-            "Symbol": meta["symbol"],
-            "Period": meta["period"],
-            "Optimization": 1,
-            "Model": meta.get("optimization_model", 1),
-            "FromDate": meta["start_date"],
-            "ToDate": meta["end_date"],
-            "ForwardMode": 0,
-            "Deposit": meta["deposit"],
-            "Currency": meta["currency"],
-            "ProfitInPips": 0,
-            "Leverage": meta["leverage"],
-            "ExecutionMode": 0,
-            "OptimizationCriterion": meta.get("optimization_criterion", 0),
-        },
-        "TesterInputs": inputs,
-    }
-
-
-def render_ini_string(ini_data: dict) -> str:
-    """Render a structured .ini dictionary into a string.
-
-    Args:
-        ini_data (dict): .ini structured data.
-
-    Returns:
-        str: String formatted for .ini file output.
-    """
-    if not ini_data:
-        return ""
-
-    lines = ["[Tester]"]
-    for key, value in ini_data.get("Tester", {}).items():
-        lines.append(f"{key}={value}")
-
-    lines.append("\n[TesterInputs]")
-    for key, val in ini_data.get("TesterInputs", {}).items():
-        lines.append(f"{key}={val}")
-
-    return "\n".join(lines)
-
-
-# --- Prediction Insert Helpers ---
-
-
-def get_db_session() -> Session:
-    """Create a SQLAlchemy session for OptiView database.
-
-    Returns:
-        Session: SQLAlchemy session object.
-    """
-    engine = create_engine(f"sqlite:///{get_optiview_db_path()}")
-    Base.metadata.create_all(engine)
-    return Session(bind=engine)
-
-
-def insert_predictions(predictions: list[dict]) -> None:
-    """Insert or upsert predictions into OptiView database.
-
-    Args:
-        predictions (list[dict]): List of prediction rows.
+        predictions (list[dict]): List of predicted setting dictionaries.
 
     Returns:
         None
     """
-    session = get_db_session()
+    session = get_optiview_session()
     try:
-        for row in predictions:
-            session.merge(PredictedSetting(**row))
+        for pred in predictions:
+            setting = PredictedSetting(**pred)
+            session.add(setting)
         session.commit()
+    except Exception as e:
+        session.rollback()
+        raise e
     finally:
         session.close()
+
+
+# --- Feature Extraction Utilities ---
+
+
+def extract_input_matrix(
+    df: pd.DataFrame,
+    input_keys: list[str],
+) -> pd.DataFrame:
+    """Extract feature columns from a DataFrame based on input keys.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing input parameters.
+        input_keys (list[str]): List of input feature names.
+
+    Returns:
+        pd.DataFrame: Feature matrix (X) for training or prediction.
+    """
+    if not input_keys:
+        return pd.DataFrame()
+    return df[input_keys]
+
+
+def get_training_features(df: pd.DataFrame) -> list[str]:
+    """Identify training feature names based on available params_json keys.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing optimization runs.
+
+    Returns:
+        list[str]: List of input parameter names.
+    """
+    if df.empty:
+        return []
+    sample_params = df["params_json"].dropna().iloc[0]
+    if not isinstance(sample_params, dict):
+        return []
+    return sorted(sample_params.keys())
+
+
+# --- Prediction Dictionary Utilities ---
 
 
 def convert_to_prediction_dict(
@@ -179,115 +83,68 @@ def convert_to_prediction_dict(
     symbol: str,
     model_name: str,
     month: str,
-    expert_name: Optional[str] = None,
     confidence_score: Optional[float] = None,
     confidence_stars: Optional[str] = None,
+    version: Optional[str] = None,
     predicted_profit: Optional[float] = None,
 ) -> dict[str, Any]:
-    """Convert a prediction row into a dictionary suitable for database insertion.
+    """Convert a prediction result row into a dictionary for database insertion.
 
     Args:
-        row (pd.Series): Data row.
+        row (pd.Series): Row containing params_json and results.
         symbol (str): Trading symbol.
-        model_name (str): Model name.
-        month (str): Month string ("YYYY-MM").
-        expert_name (Optional[str]): EA expert name.
-        confidence_score (Optional[float]): Model confidence score.
-        confidence_stars (Optional[str]): Star rating.
-        predicted_profit (Optional[float]): Predicted profit.
+        model_name (str): Machine learning model used.
+        month (str): Month being predicted ("YYYY-MM").
+        confidence_score (Optional[float], optional): Confidence score (0.0–1.0). Defaults to None.
+        confidence_stars (Optional[str], optional): Confidence stars ("★☆☆☆☆"). Defaults to None.
+        version (Optional[str], optional): Config version tag. Defaults to None.
+        predicted_profit (Optional[float], optional): Predicted profit value. Defaults to None.
 
     Returns:
-        dict[str, Any]: Formatted dictionary for PredictedSetting.
+        dict[str, Any]: Dictionary ready for database insertion.
     """
-    inputs_dict = {k: row[k] for k in row.index if k.startswith("input_")}
+    params = row.get("params_json", {})
+    if not isinstance(params, dict):
+        params = {}
 
     return {
         "month": month,
         "symbol": symbol,
-        "model": ModelType(model_name),
-        "rank": row.get("rank", 1),
-        "predicted_profit": predicted_profit,
+        "model": model_name,
         "confidence_score": confidence_score,
         "confidence_stars": confidence_stars,
-        "expert_name": expert_name,
-        "inputs": inputs_dict,
-        "run_id": row.get("run_id"),
-        "tags": [],
-        "notes": None,
+        "predicted_profit": predicted_profit,
+        "params_json": params,
+        "version": version,
     }
 
 
 def save_prediction_outputs(
-    df: pd.DataFrame,
-    symbol: str,
-    model_name: str,
-    predict_month: pd.Timestamp,
+    predictions: list[dict[str, Any]],
+    session: Optional[Session] = None,
 ) -> None:
-    """Convert and store predictions into the OptiView database.
+    """Save prediction outputs into the database.
 
     Args:
-        df (pd.DataFrame): DataFrame of prediction results.
-        symbol (str): Trading symbol.
-        model_name (str): Model name.
-        predict_month (pd.Timestamp): Prediction target month.
+        predictions (list[dict]): List of prediction dictionaries.
+        session (Optional[Session], optional): Existing database session if available.
 
     Returns:
         None
     """
-    month = predict_month.strftime("%Y-%m")
-    predictions = [
-        convert_to_prediction_dict(row, symbol, model_name, month)
-        for _, row in df.iterrows()
-    ]
-    insert_predictions(predictions)
-    print(
-        f"✅ Saved {len(predictions)} predictions for {symbol} ({model_name}) into database."
-    )
+    close_session = False
+    if session is None:
+        session = get_optiview_session()
+        close_session = True
 
-
-# --- Feature Extraction Helpers ---
-
-
-def extract_input_matrix(df: pd.DataFrame, input_keys: list[str]) -> pd.DataFrame:
-    """Extract the input matrix from params_json.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing params_json.
-        input_keys (list[str]): List of input parameter keys.
-
-    Returns:
-        pd.DataFrame: DataFrame containing only input features.
-    """
-    parsed_rows = []
-
-    for val in df["params_json"].dropna():
-        try:
-            parsed = val if isinstance(val, dict) else json.loads(val)
-            if not isinstance(parsed, dict):
-                parsed = {}
-        except Exception:
-            parsed = {}
-
-        row = {k: parsed.get(k, None) for k in input_keys}
-        parsed_rows.append(row)
-
-    return pd.DataFrame(parsed_rows, index=df.index)
-
-
-def get_training_features(df: pd.DataFrame) -> list[str]:
-    """Extract input feature keys from params_json.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing params_json field.
-
-    Returns:
-        list[str]: List of input feature keys.
-    """
-    for val in df["params_json"].dropna():
-        try:
-            parsed = val if isinstance(val, dict) else json.loads(val)
-            if isinstance(parsed, dict):
-                return list(parsed.keys())
-        except Exception:
-            continue
-    raise ValueError("No valid params_json found in training dataframe.")
+    try:
+        for pred in predictions:
+            setting = PredictedSetting(**pred)
+            session.add(setting)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        if close_session:
+            session.close()

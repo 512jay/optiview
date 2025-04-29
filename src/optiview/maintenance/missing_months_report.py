@@ -11,8 +11,8 @@ import pandas as pd
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from optiview.data.db_path import get_optiview_db_path
-from optiview.data.models import PredictedSetting
+from optiview.database.loader import get_optiview_db_path
+from optiview.database.models import PredictedSetting
 
 
 def generate_missing_months_report(lookback_months: int = 12) -> pd.DataFrame:

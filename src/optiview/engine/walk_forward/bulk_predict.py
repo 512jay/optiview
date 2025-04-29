@@ -1,136 +1,181 @@
 # File: src/optiview/engine/walk_forward/bulk_predict.py
 
-"""Bulk prediction generator for OptiView.
-
-Scans historical backtest data, trains models, and saves predictions
-for the next month(s) for each symbol.
-"""
+"""Bulk prediction engine for OptiView: scalable to 10M+ runs."""
 
 from __future__ import annotations
 
-import argparse
+import sys
+from pathlib import Path
 from typing import List
 
 import pandas as pd
 
-from optiview.data.loader import load_runs
 from optiview.engine.walk_forward.predict import predict_optimal_config
-from optiview.maintenance.missing_months_report import generate_missing_months_report
+from optiview.engine.walk_forward.time_utils import get_next_month
+from optiview.database.loader import get_all_symbols, load_symbol_months_runs
 
 
-def find_predictable_months_for_symbol(
-    symbol_runs: pd.DataFrame,
-    min_history: int = 3,
-) -> List[str]:
-    """Find months eligible for prediction for a given symbol.
+# --- Helper Functions ---
 
-    Args:
-        symbol_runs (pd.DataFrame): DataFrame of historical runs for a symbol.
-        min_history (int): Minimum number of historical months required.
+
+def load_target_symbols() -> list[str]:
+    """Load list of target symbols to predict for.
 
     Returns:
-        List[str]: List of predictable months ("YYYY-MM").
+        List of symbols. If 'predict_symbols.txt' exists, uses it.
+        Otherwise loads all symbols available in database.
     """
-    months = symbol_runs["run_month"].dropna().unique()
-    months_sorted = sorted(months)
+    file_path = Path("scripts/database/predict_symbols.txt")
+    if file_path.exists():
+        with open(file_path, "r", encoding="utf-8") as f:
+            symbols = [line.strip() for line in f if line.strip()]
+        print(f"✅ Loaded {len(symbols)} symbols from predict_symbols.txt")
+        return symbols
+    else:
+        print(
+            "ℹ️ No predict_symbols.txt found — scanning available symbols from OptiBatch runs."
+        )
+        return get_all_symbols()
 
-    if len(months_sorted) <= min_history:
+
+def get_available_months_for_symbol(symbol: str) -> list[str]:
+    """Get list of months that have completed backtests for a symbol.
+
+    Args:
+        symbol: The trading symbol.
+
+    Returns:
+        Sorted list of months (YYYY-MM) that have data.
+    """
+    df = load_symbol_months_runs(symbol, [])
+    if df.empty:
+        return []
+    return sorted(df["run_month"].dropna().unique())
+
+
+def get_previous_months(
+    all_months: list[str],
+    target_month: str,
+    months_back: int,
+) -> list[str]:
+    """Get previous months for training, even if the target month is not in available months.
+
+    This function computes the training window by selecting the `months_back` months
+    immediately preceding the `target_month`. If `target_month` is not present in
+    `all_months`, it is assumed to be the next chronological month after the last
+    entry in `all_months`.
+
+    Args:
+        all_months (list[str]): Chronologically sorted list of available months (format: YYYY-MM).
+        target_month (str): The month to predict for (format: YYYY-MM).
+        months_back (int): The number of prior months to use for training.
+
+    Returns:
+        list[str]: A list of previous months to use for training. Returns an empty list
+        if there are insufficient historical months available.
+    """
+    if target_month in all_months:
+        target_idx = all_months.index(target_month)
+    else:
+        target_idx = len(all_months)
+
+    if target_idx < months_back:
         return []
 
-    return months_sorted[min_history:]
+    return all_months[target_idx - months_back : target_idx]
 
 
-def main() -> None:
-    """Main entrypoint for running bulk predictions."""
-    parser = argparse.ArgumentParser(description="Run bulk predictions.")
-    parser.add_argument(
-        "--months_back",
-        type=int,
-        default=3,
-        help="How many months back to use for training.",
-    )
-    parser.add_argument(
-        "--target",
-        type=str,
-        default="profit",
-        help="Target column name for training.",
-    )
-    parser.add_argument(
-        "--full-history",
-        action="store_true",
-        help="Predict across all months (default: only next month).",
-    )
-    args = parser.parse_args()
+def validate_months_window(
+    training_months: list[str], available_months: list[str]
+) -> bool:
+    """Ensure that all months in the training window actually exist.
 
-    print("🔄 Starting automatic bulk prediction process...")
+    Args:
+        training_months: Months we want to use for training.
+        available_months: All months we have data for.
 
-    df = load_runs()
+    Returns:
+        True if valid, False if any months missing.
+    """
+    missing = [m for m in training_months if m not in available_months]
+    if missing:
+        print(f"⚠️ Missing months in training window: {missing}. Skipping prediction.")
+        return False
+    return True
 
-    if df.empty:
-        print("❌ No runs found to predict from.")
-        return
 
-    symbols = sorted(df["symbol"].unique())
-    models = ["xgb", "rf", "cat", "lgbm", "gbr", "histgb"]
+# --- Main Prediction Runner ---
+
+
+def bulk_predict(full_history: bool = False, months_back: int = 3) -> None:
+    """Bulk predict optimal configurations for multiple symbols and months.
+
+    Args:
+        full_history: If True, predict for all historical months possible.
+                      If False, predict for the next upcoming month only.
+        months_back: How many previous months to use when training the model.
+    """
+    print("🔄 Starting bulk prediction process...")
+
+    symbols = load_target_symbols()
 
     for symbol in symbols:
-        symbol_runs = df[df["symbol"] == symbol]
+        print(f"\n🔎 Processing symbol: {symbol}")
 
-        if symbol_runs.empty:
-            print(f"⚠️ No data for symbol: {symbol}. Skipping...")
+        available_months = get_available_months_for_symbol(symbol)
+        if len(available_months) <= months_back:
+            print(f"⚠️ Not enough historical months for {symbol}. Skipping.")
             continue
 
-        if args.full_history:
-            predict_months = find_predictable_months_for_symbol(
-                symbol_runs, min_history=args.months_back
-            )
-            if not predict_months:
-                print(f"⚠️ Not enough historical months for {symbol}. Skipping...")
-                continue
+        # Determine which months to predict
+        if full_history:
+            target_months = available_months[months_back:]
         else:
-            months = symbol_runs["run_month"].dropna().unique()
-            months = sorted(months)
-            if len(months) <= args.months_back:
-                print(f"⚠️ Not enough historical months for {symbol}. Skipping...")
-                continue
-            latest_month = months[-1]
-            year_str, month_str = latest_month.split("-")
-            year = int(year_str)
-            month = int(month_str)
-            if month == 12:
-                next_month = f"{year + 1}-01"
-            else:
-                next_month = f"{year}-{month + 1:02d}"
-            predict_months = [next_month]
+            latest_month = available_months[-1]
+            next_month = get_next_month(latest_month)
+            target_months = [next_month]
 
-        for predict_month in predict_months:
-            for model in models:
-                print(f"🔮 Predicting {symbol} ({model}) for {predict_month}...")
+        for predict_month in target_months:
+            # Build training window
+            training_months = get_previous_months(
+                available_months, predict_month, months_back
+            )
+            if not training_months:
+                print(
+                    f"⚠️ Not enough training months for {symbol} {predict_month}. Skipping."
+                )
+                continue
+
+            if not validate_months_window(training_months, available_months):
+                continue
+
+            months_to_load = training_months + [predict_month]
+            runs_df = load_symbol_months_runs(symbol, months_to_load)
+
+            if runs_df.empty:
+                print(f"⚠️ No runs loaded for {symbol} in {months_to_load}. Skipping.")
+                continue
+
+            # Predict across all supported models
+            for model in ["xgb", "rf", "cat", "lgbm", "gbr", "histgb"]:
                 try:
+                    print(f"🔮 Predicting {symbol} {predict_month} ({model})...")
                     predict_optimal_config(
-                        df=symbol_runs,
+                        df=runs_df,
                         symbol=symbol,
                         predict_month=predict_month,
-                        months_back=args.months_back,
-                        target=args.target,
+                        months_back=months_back,
                         override_model=model,
                     )
                 except Exception as e:
                     print(
-                        f"❌ Prediction failed for {symbol} ({model}) in {predict_month}: {e}"
+                        f"❌ Prediction failed for {symbol} {predict_month} ({model}): {e}"
                     )
 
     print("\n✅ Bulk prediction complete.")
 
-    print("\n🧹 Checking for missing prediction months...")
-    report = generate_missing_months_report(lookback_months=12)
-
-    if report.empty:
-        print("✅ No missing months detected.")
-    else:
-        print("⚠️ Missing months detected:")
-        print(report.to_string(index=False))
-
 
 if __name__ == "__main__":
-    main()
+    # Allow CLI usage: python bulk_predict.py --full-history
+    full_history_flag = "--full-history" in sys.argv
+    bulk_predict(full_history=full_history_flag)

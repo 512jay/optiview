@@ -10,10 +10,11 @@ import sqlite3
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from optiview.data.db_path import get_optiview_db_path, get_optibatch_db_path
-from optiview.data.models import PredictedSetting, EvaluatedSetting
+from optiview.database.db_paths import get_optiview_db_path, get_optibatch_db_path
+from optiview.database.models import PredictedSetting, EvaluatedSetting
 
 # Constants
+INPUT_TOLERANCE = 1e-4
 EVALUATOR_VERSION = "baseline_v1"
 
 # --- Loading Functions ---
@@ -58,7 +59,11 @@ def get_next_month_runs(all_runs: list[dict], symbol: str, month: str) -> list[d
 def match_prediction(inputs: dict, next_runs: list[dict]) -> Optional[float]:
     """Find matching actual profit for predicted inputs."""
     for r in next_runs:
-        if all(inputs.get(k) == r.get(k) for k in inputs):
+        if all(
+            abs(inputs.get(k, 0) - r.get(k, 0)) <= INPUT_TOLERANCE
+            for k in inputs
+            if isinstance(r.get(k, None), (int, float))
+        ):
             return r.get("profit")
     return None
 

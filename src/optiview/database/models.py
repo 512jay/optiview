@@ -1,9 +1,9 @@
-# File: src/optiview/data/models.py
+# File: src/optiview/database/models.py
 
 from __future__ import annotations
 import enum
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from sqlalchemy import (
     String,
     Float,
@@ -14,6 +14,7 @@ from sqlalchemy import (
     Enum,
     func,
     PrimaryKeyConstraint,
+    Column,
 )
 from sqlalchemy.orm import Mapped, mapped_column, DeclarativeBase
 
@@ -33,6 +34,7 @@ class ModelType(enum.Enum):
 
 class PredictedSetting(Base):
     __tablename__ = "predicted_settings"
+    version = Column(String, nullable=True)
 
     # --- Composite Primary Key ---
     month: Mapped[str] = mapped_column(String)  # e.g. '2025-03'
@@ -48,7 +50,6 @@ class PredictedSetting(Base):
     confidence_stars: Mapped[Optional[str]]  # e.g. '★★★☆☆'
 
     # --- Strategy Metadata ---
-    expert_name: Mapped[Optional[str]]  # EA name (display only)
     inputs: Mapped[dict] = mapped_column(JSON)  # Input parameters as JSON
     run_id: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True
@@ -67,6 +68,9 @@ class PredictedSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+    # --- Machine Learning training data ---
+    params_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
 
 class EvaluatedSetting(Base):
@@ -104,3 +108,23 @@ class EvaluatedSetting(Base):
     evaluated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     __table_args__ = (PrimaryKeyConstraint("id"),)
+
+
+class SyncedJob(Base):
+    """Lightweight mirror of relevant fields from OptiBatch jobs table."""
+
+    __tablename__ = "synced_jobs"
+
+    id: Mapped[str] = mapped_column(primary_key=True)  # job_id
+    expert_name: Mapped[str]
+    expert_path: Mapped[str]
+    period: Mapped[str]
+    deposit: Mapped[float]
+    currency: Mapped[str]
+    leverage: Mapped[str]
+    model: Mapped[Optional[str]] = mapped_column(nullable=True)
+    optimization_mode: Mapped[Optional[str]] = mapped_column(nullable=True)
+    optimization_criterion: Mapped[Optional[str]] = mapped_column(nullable=True)
+    tester_inputs: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

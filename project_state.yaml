@@ -1,5 +1,5 @@
 project_name: OptiView
-last_updated: '2025-04-25'
+last_updated: '2025-04-26'
 
 current_phase: walk-forward prediction + evaluation
 
@@ -27,6 +27,11 @@ phases:
 next_tasks:
   - Build Streamlit UI initial skeleton (entry point, tabs, db connection)
   - Implement View Predictions tab (filters + table display)
+  - Implement basic prediction summary screen:
+      - List predicted settings for latest available month
+      - Include symbol, model, predicted profit, confidence stars, expert advisor
+      - Allow basic filtering by symbol and model
+      - Highlight missing months if detected
   - Add prediction confidence and quality stars
   - Implement note/tag editing per prediction
   - Build Model Evaluation Insights (quality histogram, summary table)
@@ -50,3 +55,10 @@ principles:
   - models must be EA-agnostic (no input_ assumption)
   - annotation always recomputes
   - all code mypy compliant
+
+recent_updates:
+  - Refactored bulk_predict.py to align with updated predict_optimal_config signature
+  - Removed deprecated prediction_col and prediction_error_penalty arguments
+  - Improved docstrings across bulk prediction, evaluation, and metadata modules
+  - Streamlined imports for PEP-8 compliance
+  - All prediction and evaluation modules now mypy and Sphinx compatible

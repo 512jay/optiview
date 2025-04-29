@@ -1,8 +1,14 @@
-# File: scripts/init_db.py
+# scripts/init_db.py
+
+import sys
+from pathlib import Path
+
+# Add the project src/ folder to sys.path
+sys.path.append(str(Path(__file__).resolve().parents[2] / "src"))
 
 from sqlalchemy import create_engine
-from optiview.data.db_path import get_optiview_db_path
-from optiview.data.models import Base
+from optiview.database.db_paths import get_optiview_db_path
+from optiview.database.models import Base
 
 
 def init_db():
