@@ -1,28 +1,40 @@
 # File: src/optiview/database/models.py
 
-from __future__ import annotations
-import enum
+"""
+Database models for the OptiView project.
+
+Includes predicted settings, evaluated results, synced jobs, and tuning metadata.
+Adheres to PEP 8, PEP 257, and uses SQLAlchemy 2.0 typing style.
+"""
+
 from datetime import datetime
 from typing import Optional, Any
 from sqlalchemy import (
+    Column,
     String,
-    Float,
     Integer,
-    JSON,
+    Float,
     Text,
+    JSON,
     DateTime,
     Enum,
-    func,
     PrimaryKeyConstraint,
-    Column,
+    UniqueConstraint,
+    MetaData,
 )
-from sqlalchemy.orm import Mapped, mapped_column, DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.sql import func
+import enum
+
+# --- SQLAlchemy Base ---
+metadata = MetaData()
 
 
 class Base(DeclarativeBase):
-    pass
+    metadata = metadata
 
 
+# --- Enum for model types ---
 class ModelType(enum.Enum):
     xgb = "xgb"
     rf = "rf"
@@ -32,90 +44,96 @@ class ModelType(enum.Enum):
     cat = "cat"
 
 
+# --- Prediction Results ---
 class PredictedSetting(Base):
-    __tablename__ = "predicted_settings"
-    version = Column(String, nullable=True)
+    """Machine learning predictions for a specific symbol and month."""
 
-    # --- Composite Primary Key ---
-    month: Mapped[str] = mapped_column(String)  # e.g. '2025-03'
-    symbol: Mapped[str] = mapped_column(String)  # e.g. 'EURUSD'
-    model: Mapped[ModelType] = mapped_column(Enum(ModelType))  # e.g. 'xgb'
-    rank: Mapped[int] = mapped_column()  # Rank within the top-N predictions
+    __tablename__ = "predicted_settings"
+
+    # Composite key per prediction
+    month: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    model: Mapped[ModelType] = mapped_column(Enum(ModelType))
+    rank: Mapped[int] = mapped_column(Integer)
 
     __table_args__ = (PrimaryKeyConstraint("month", "symbol", "model", "rank"),)
 
-    # --- Prediction Results ---
+    version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     predicted_profit: Mapped[float]
-    confidence_score: Mapped[Optional[float]]  # 0.0 - 1.0 confidence score
-    confidence_stars: Mapped[Optional[str]]  # e.g. '★★★☆☆'
+    confidence_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    confidence_stars: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
-    # --- Strategy Metadata ---
-    inputs: Mapped[dict] = mapped_column(JSON)  # Input parameters as JSON
-    run_id: Mapped[Optional[int]] = mapped_column(
-        Integer, nullable=True
-    )  # Link to OptiBatch run
+    # Serialized configuration
+    inputs: Mapped[dict] = mapped_column(JSON)
+    params_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
-    # --- User Annotation Fields ---
-    tags: Mapped[list[str]] = mapped_column(
-        JSON, default=list
-    )  # Arbitrary tags for filtering
-    notes: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )  # Notes or rationale
+    # Run metadata
+    run_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    job_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    predicted_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    # --- Audit Info ---
+    # User-defined annotations
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
-    # --- Machine Learning training data ---
-    params_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
-
+# --- Evaluation Results ---
 class EvaluatedSetting(Base):
-    """Evaluation results linked to a predicted configuration."""
+    """Stores actual performance for predicted configurations and scoring metadata."""
 
     __tablename__ = "evaluated_settings"
 
-    # --- Primary Key ---
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    # --- Link to Prediction ---
-    month: Mapped[str] = mapped_column(String)  # Redundant for easy JOINs
+    # Prediction reference
+    month: Mapped[str] = mapped_column(String)
     symbol: Mapped[str] = mapped_column(String)
-    model: Mapped[ModelType] = mapped_column(Enum(ModelType))
-    rank: Mapped[int] = mapped_column()
+    model: Mapped[str] = mapped_column(String)
+    rank: Mapped[int] = mapped_column(Integer)
+    evaluator_version: Mapped[str] = mapped_column(String)
 
-    # --- Evaluation Version Info ---
-    evaluator_version: Mapped[str] = mapped_column(
-        String
-    )  # e.g. 'baseline_v1', 'v2_experiment'
+    # Scoring outputs
+    quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    quality_stars: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    confidence_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    confidence_stars: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
-    # --- Evaluation Metrics ---
-    quality_score: Mapped[Optional[float]]  # Final backtested quality
-    quality_stars: Mapped[Optional[str]]  # e.g. '★★★☆☆'
-    confidence_score: Mapped[Optional[float]]  # Predicted confidence at eval time
-    confidence_stars: Mapped[Optional[str]]  # e.g. '★★★★☆'
-
-    # --- Metadata ---
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Human notes
-    metrics_json: Mapped[Optional[dict]] = mapped_column(
-        JSON, nullable=True
-    )  # Future metrics
-
-    # --- Audit Info ---
+    # Result values
+    actual_result: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    predicted_profit: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    matched_run_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    matched_job_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     evaluated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    __table_args__ = (PrimaryKeyConstraint("id"),)
+    # Optional info
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metrics_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("id"),
+        UniqueConstraint(
+            "month",
+            "symbol",
+            "model",
+            "rank",
+            "evaluator_version",
+            name="uq_evaluated_config_versioned",
+        ),
+    )
 
 
+# --- Synced Jobs from OptiBatch ---
 class SyncedJob(Base):
-    """Lightweight mirror of relevant fields from OptiBatch jobs table."""
+    """Lightweight mirror of OptiBatch jobs with metadata and tester inputs."""
 
     __tablename__ = "synced_jobs"
 
-    id: Mapped[str] = mapped_column(primary_key=True)  # job_id
+    id: Mapped[str] = mapped_column(primary_key=True)
     expert_name: Mapped[str]
     expert_path: Mapped[str]
     period: Mapped[str]
@@ -130,9 +148,9 @@ class SyncedJob(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
-# --- Tuning Settings Models ---
+# --- Tuning Configurations ---
 class TuningSettings(Base):
-    """Stores versioned tuning settings for confidence and evaluation scoring."""
+    """Stores versioned scoring logic and confidence weighting rules."""
 
     __tablename__ = "tuning_settings"
 
@@ -142,5 +160,5 @@ class TuningSettings(Base):
     )  # ISO8601 UTC timestamp
     version_name: Mapped[str] = mapped_column(String, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    confidence_settings_json: Mapped[str] = mapped_column(String, nullable=False)
-    evaluation_settings_json: Mapped[str] = mapped_column(String, nullable=False)
+    confidence_settings_json: Mapped[str] = mapped_column(Text, nullable=False)
+    evaluation_settings_json: Mapped[str] = mapped_column(Text, nullable=False)

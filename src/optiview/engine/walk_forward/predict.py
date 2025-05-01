@@ -164,7 +164,8 @@ def create_prediction_entry(
         "params_json": safe_jsonify_dict(
             {str(k): v for k, v in top_row.to_dict().items()}
         ),
-        "run_id": None,
+        "run_id": safe_convert(top_row.get("id")),
+        "job_id": top_row.get("job_id"),
         "tags": [],
         "notes": None,
     }
@@ -194,6 +195,8 @@ def insert_predictions(predictions: list[dict[str, Any]]) -> None:
             existing.params_json = pred["params_json"]
             existing.tags = pred.get("tags", [])
             existing.notes = pred.get("notes", None)
+            existing.job_id = pred["job_id"]
+            existing.run_id = pred["run_id"]
         else:
             session.add(PredictedSetting(**pred))
 
@@ -230,6 +233,7 @@ def predict_optimal_config(
 
     if test_df.empty:
         return
+
 
     if "params_json" in test_df.columns:
         test_df["params_json"] = test_df["params_json"].apply(json.loads)
