@@ -12,7 +12,7 @@ def get_available_prediction_months() -> list[str]:
     """Return sorted months that have predictions available."""
     engine = create_engine(f"sqlite:///{get_optiview_db_path()}", future=True)
     with Session(engine) as session:
-        months: list[str] = session.query(distinct(PredictedSetting.month)).all()
+        months: list = session.query(distinct(PredictedSetting.month)).all()
         return sorted([m[0] for m in months if m[0]], reverse=True)
 
 

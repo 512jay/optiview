@@ -57,7 +57,7 @@ def main() -> None:
         )
     else:
         top_symbols = predictions_df["symbol"].value_counts().head(30).index.tolist()
-        selected_symbol = st.sidebar.selectbox("Select Top Symbol", top_symbols)
+        selected_symbol: str = st.sidebar.selectbox("Select Top Symbol", top_symbols)
         selected_symbols = [selected_symbol]
 
     filtered_df = predictions_df[predictions_df["symbol"].isin(selected_symbols)]
