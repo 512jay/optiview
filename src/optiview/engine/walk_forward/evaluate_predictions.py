@@ -133,6 +133,7 @@ def evaluate_predictions() -> None:
 
     current_month = get_current_month()
     inserted, skipped = 0, 0
+    run_cache: dict[tuple[str, str], pd.DataFrame] = {}
 
     with Session(engine) as session:
         counter = 0
@@ -154,7 +155,14 @@ def evaluate_predictions() -> None:
                 skipped += 1
                 continue
 
-            runs_df = load_symbol_months_runs(pred.symbol, [pred.month])
+            # Use cached runs if available
+            cache_key = (pred.symbol, pred.month)
+            if cache_key not in run_cache:
+                runs_df = load_symbol_months_runs(pred.symbol, [pred.month])
+                run_cache[cache_key] = runs_df
+            else:
+                runs_df = run_cache[cache_key]
+
             if runs_df.empty:
                 skipped += 1
                 continue
