@@ -132,8 +132,10 @@ def evaluate_predictions() -> None:
     print(f"🧠 Evaluating {len(predictions)} predicted settings...")
 
     current_month = get_current_month()
+    inserted, skipped = 0, 0
 
     with Session(engine) as session:
+        counter = 0
         for pred in tqdm(predictions, desc="🔍 Evaluating", unit="pred"):
             if pred.month >= current_month:
                 continue
@@ -149,16 +151,19 @@ def evaluate_predictions() -> None:
                 )
             )
             if exists:
+                skipped += 1
                 continue
 
             runs_df = load_symbol_months_runs(pred.symbol, [pred.month])
             if runs_df.empty:
+                skipped += 1
                 continue
 
             actual_profit = match_prediction(
                 pred.inputs or {}, runs_df.to_dict("records")
             )
             if actual_profit is None:
+                skipped += 1
                 continue
 
             all_profits = runs_df["profit"].dropna().tolist()
@@ -185,9 +190,16 @@ def evaluate_predictions() -> None:
                 metrics_json=None,
             )
             session.add(evaluation)
+            inserted += 1
+            counter += 1
+
+            if counter % 100 == 0:
+                session.commit()
 
         session.commit()
-        print("✅ Done: Evaluations committed.")
+
+    print(f"✅ Done: {inserted} new evaluations added.")
+    print(f"⚠️ Skipped: {skipped} already existed or had no match.")
 
 
 if __name__ == "__main__":
