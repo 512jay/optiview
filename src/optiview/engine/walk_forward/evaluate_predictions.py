@@ -15,7 +15,8 @@ from typing import Optional, Any
 
 import pandas as pd
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
+from tqdm import tqdm
 
 from optiview.database.db_paths import get_optiview_db_path
 from optiview.database.models import PredictedSetting, EvaluatedSetting
@@ -131,54 +132,62 @@ def evaluate_predictions() -> None:
     print(f"🧠 Evaluating {len(predictions)} predicted settings...")
 
     current_month = get_current_month()
-    evaluations: list[EvaluatedSetting] = []
-
-    for pred in predictions:
-        if pred.month >= current_month:
-            continue  # Skip current or future months
-
-        runs_df = load_symbol_months_runs(pred.symbol, [pred.month])
-        if runs_df.empty:
-            continue
-
-        actual_profit = match_prediction(pred.inputs or {}, runs_df.to_dict("records"))
-        if actual_profit is None:
-            continue
-
-        all_profits = runs_df["profit"].dropna().tolist()
-        quality_score = compute_quality_score(
-            pred.predicted_profit, actual_profit, all_profits
-        )
-        quality_stars = quality_to_stars(quality_score)
-
-        evaluation = EvaluatedSetting(
-            month=pred.month,
-            symbol=pred.symbol,
-            model=safe_enum(pred.model),
-            rank=pred.rank,
-            evaluator_version=EVALUATOR_VERSION,
-            quality_score=quality_score,
-            quality_stars=quality_stars,
-            confidence_score=pred.confidence_score,
-            confidence_stars=pred.confidence_stars,
-            predicted_profit=pred.predicted_profit,
-            actual_result=actual_profit,
-            matched_run_id=pred.run_id,
-            matched_job_id=pred.job_id,
-            notes=None,
-            metrics_json=None,
-        )
-        evaluations.append(evaluation)
-
-    if not evaluations:
-        print("⚠️ No matching evaluations found.")
-        return
 
     with Session(engine) as session:
-        session.add_all(evaluations)
-        session.commit()
+        for pred in tqdm(predictions, desc="🔍 Evaluating", unit="pred"):
+            if pred.month >= current_month:
+                continue
 
-    print(f"✅ Done: Inserted {len(evaluations)} evaluated settings.")
+            # Skip if evaluation already exists
+            exists = session.scalar(
+                select(EvaluatedSetting).filter_by(
+                    month=pred.month,
+                    symbol=pred.symbol,
+                    model=safe_enum(pred.model),
+                    rank=pred.rank,
+                    evaluator_version=EVALUATOR_VERSION,
+                )
+            )
+            if exists:
+                continue
+
+            runs_df = load_symbol_months_runs(pred.symbol, [pred.month])
+            if runs_df.empty:
+                continue
+
+            actual_profit = match_prediction(
+                pred.inputs or {}, runs_df.to_dict("records")
+            )
+            if actual_profit is None:
+                continue
+
+            all_profits = runs_df["profit"].dropna().tolist()
+            quality_score = compute_quality_score(
+                pred.predicted_profit, actual_profit, all_profits
+            )
+            quality_stars = quality_to_stars(quality_score)
+
+            evaluation = EvaluatedSetting(
+                month=pred.month,
+                symbol=pred.symbol,
+                model=safe_enum(pred.model),
+                rank=pred.rank,
+                evaluator_version=EVALUATOR_VERSION,
+                quality_score=quality_score,
+                quality_stars=quality_stars,
+                confidence_score=pred.confidence_score,
+                confidence_stars=pred.confidence_stars,
+                predicted_profit=pred.predicted_profit,
+                actual_result=actual_profit,
+                matched_run_id=pred.run_id,
+                matched_job_id=pred.job_id,
+                notes=None,
+                metrics_json=None,
+            )
+            session.add(evaluation)
+
+        session.commit()
+        print("✅ Done: Evaluations committed.")
 
 
 if __name__ == "__main__":
