@@ -4,8 +4,8 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy.orm import Session
 from optiview.database.session import get_optiview_session
-from optiview.database.models import EvaluatedSetting
-from sqlalchemy import select
+from optiview.database.models import EvaluatedSetting, PredictedSetting
+from sqlalchemy import select, and_
 from collections import defaultdict
 
 # ------------------------------
@@ -28,6 +28,13 @@ st.info(
 
 stmt = select(EvaluatedSetting).where(EvaluatedSetting.rank == 1)
 results = session.scalars(stmt).all()
+
+# Preload all predicted settings into a lookup
+pred_stmt = select(PredictedSetting)
+predicted_all = session.scalars(pred_stmt).all()
+predicted_lookup = {
+    (p.month, p.symbol, p.model.value, p.rank): p for p in predicted_all
+}
 session.close()
 
 # Group by (month, symbol, model)
@@ -67,7 +74,15 @@ for month in sorted_months:
         report_rows.append({"Month": month, "Status": "Missing"})
         continue
 
-    yield_percent = (best.actual_result / 1000.0) * 100
+    yield_percent = best.actual_result / 10.0
+
+    # Look up corresponding predicted setting for parameters
+    predicted_key = (best.month, best.symbol, best.model, best.rank)
+    params = predicted_lookup.get(predicted_key)
+    settings = ""
+    if params and params.params_json:
+        settings = ", ".join(f"{k}={v}" for k, v in params.params_json.items())
+
     report_rows.append(
         {
             "Month": month,
@@ -75,6 +90,7 @@ for month in sorted_months:
             "Model": best.model,
             "Profit ($)": round(best.actual_result, 2),
             "Yield (%)": round(yield_percent, 2),
+            "Settings": settings,
             "Status": "OK",
         }
     )
